@@ -1,0 +1,59 @@
+import spacy
+
+# 加载 spaCy 英文模型
+nlp = spacy.load("en_core_web_sm")
+
+# 示例文本
+text = """
+She buys new instruments every month.
+They used the microscope yesterday.
+We are purchasing new lab equipment.
+I use the tools daily.
+He bought a new device from the store.
+"""
+
+# 给一组基本形式的动词
+target_verbs = {"use", "buy", "purchase"}
+
+# 可选的设备名词表
+equipment_keywords = {"microscope", "equipment", "tools", "devices", "instrument", "instruments", "device"}
+
+# 分析文本
+doc = nlp(text)
+
+# 存结果
+results = []
+
+for sent in doc.sents:
+    for token in sent:
+        # 判断当前 token 是否是目标动词的变形
+        if token.lemma_ in target_verbs and token.pos_ == "VERB":
+            found_nouns = []
+
+            # 方法1：找依赖中的直接宾语或介词宾语
+            for child in token.children:
+                if child.dep_ in {"dobj", "pobj"} and child.pos_ == "NOUN":
+                    found_nouns.append(child.text)
+
+            # 方法2：可选，看动词附近 ±2 的词（更宽松匹配）
+            for i in range(max(0, token.i - 2), min(len(doc), token.i + 3)):
+                tok = doc[i]
+                if tok.pos_ == "NOUN":
+                    found_nouns.append(tok.text)
+
+            # 可选：匹配设备关键词
+            filtered_nouns = [noun for noun in found_nouns if noun.lower() in equipment_keywords]
+
+            results.append({
+                "sentence": sent.text.strip(),
+                "verb_found": token.text,
+                "lemma": token.lemma_,
+                "matched_nouns": list(set(filtered_nouns or found_nouns))
+            })
+
+# 打印结果
+for item in results:
+    print(f"句子: {item['sentence']}")
+    print(f"动词: {item['verb_found']}（原型: {item['lemma']}）")
+    print(f"相关名词: {item['matched_nouns']}")
+    print("---")
