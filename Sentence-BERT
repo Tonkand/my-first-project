@@ -1,0 +1,88 @@
+
+📦 完整句子相似度模型 Pipeline
+
+✅ 功能說明：
+1. 利用 Sentence-BERT 微調模型，學習語意相似度
+2. 同時保留語法分析（POS / 依存關係）作為輔助特徵
+3. 可查找新段落中的句子是否與訓練句子相同/相似
+
+🔧 一、安裝套件
+pip install sentence-transformers faiss-cpu spacy scikit-learn pandas nltk
+python -m spacy download en_core_web_sm
+
+🧠 二、準備訓練資料（句對 + 相似度）
+
+from sentence_transformers import InputExample
+
+# 模擬一些相似/不相似的句子對
+train_data = [
+    InputExample(texts=["She bought a new car.", "She purchased a new car."], label=0.95),
+    InputExample(texts=["The site was acquired in 2010.", "In 2010, the site was purchased."], label=0.9),
+    InputExample(texts=["He is going to the store.", "She is staying home."], label=0.1),
+]
+
+🏗️ 三、模型微調
+
+from sentence_transformers import SentenceTransformer, losses
+from torch.utils.data import DataLoader
+
+model = SentenceTransformer('all-MiniLM-L6-v2')  # 小模型也很好用
+
+train_dataloader = DataLoader(train_data, shuffle=True, batch_size=4)
+train_loss = losses.CosineSimilarityLoss(model)
+
+model.fit(
+    train_objectives=[(train_dataloader, train_loss)],
+    epochs=2,
+    warmup_steps=10,
+    show_progress_bar=True
+)
+
+model.save("semantic_syntax_model")
+
+🧪 四、查詢：找出相似句子
+
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+
+# 載入訓練好的模型
+model = SentenceTransformer("semantic_syntax_model")
+
+# 原始語料（向量庫）
+corpus_sentences = [
+    "She bought a new car.",
+    "The site was acquired in 2010.",
+    "He is going to the store.",
+]
+corpus_embeddings = model.encode(corpus_sentences)
+
+# 要查的新段落
+new_text = "In 2010, the site was purchased. She purchased a car yesterday."
+
+import nltk
+nltk.download('punkt')
+from nltk.tokenize import sent_tokenize
+
+query_sentences = sent_tokenize(new_text)
+query_embeddings = model.encode(query_sentences)
+
+# 比對相似度
+for i, (query, emb) in enumerate(zip(query_sentences, query_embeddings)):
+    sims = cosine_similarity([emb], corpus_embeddings)[0]
+    best_idx = np.argmax(sims)
+    best_score = sims[best_idx]
+    if best_score > 0.7:
+        print(f"🟡 類似句子: {query}")
+        print(f"   🔗 最相似: {corpus_sentences[best_idx]}")
+        print(f"   🔢 相似度: {best_score:.4f}\n")
+    else:
+        print(f"✅ 不相似句子: {query}\n")
+
+🧠 五、可選加強：加入語法資訊（POS / dependency）
+
+import spacy
+nlp = spacy.load("en_core_web_sm")
+
+doc = nlp("She purchased a new car.")
+print("POS tags:", [token.pos_ for token in doc])
+print("Dependencies:", [token.dep_ for token in doc])
