@@ -1,0 +1,32 @@
+import spacy
+
+nlp = spacy.load("en_core_web_sm")
+
+def detect_verb_voice(sentence, target_verbs):
+    """
+    识别特定动词的语态：active 或 passive
+    """
+    doc = nlp(sentence)
+    results = []
+    for token in doc:
+        if token.lemma_ in target_verbs and token.pos_ == "VERB":
+            # 检查该动词是否有被动助动词(auxpass)或被动主语(nsubjpass)
+            has_auxpass = any(child.dep_ == "auxpass" for child in token.children)
+            has_nsubjpass = any(child.dep_ == "nsubjpass" for child in token.children)
+            voice = "passive" if has_auxpass or has_nsubjpass else "active"
+            results.append((token.text, token.lemma_, voice))
+    return results
+
+# 示例
+sentences = [
+    "The firm was acquired by the company in 2010.",
+    "The company acquired the firm in 2010.",
+    "The property was purchased and later sold.",
+    "They purchased the equipment last year."
+]
+
+target_verbs = {"acquire", "purchase"}
+
+for s in sentences:
+    print(f"\nSentence: {s}")
+    print("Results:", detect_verb_voice(s, target_verbs))
