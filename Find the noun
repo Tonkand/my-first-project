@@ -1,0 +1,17 @@
+from nltk.corpus import wordnet
+import nltk
+nltk.download('wordnet')
+
+def get_noun_derivations(word):
+    nouns = set()
+    for syn in wordnet.synsets(word):
+        for lemma in syn.lemmas():
+            for related_form in lemma.derivationally_related_forms():
+                if related_form.synset().pos() == 'n':
+                    nouns.add(related_form.name().replace("_", " "))
+    return list(nouns)
+
+# 示例
+print(get_noun_derivations("decide"))  # ['decision', 'deciding', 'decider']
+print(get_noun_derivations("employ"))  # ['employment', 'employer', 'employee']
+print(get_noun_derivations("fail"))    # ['failure']
