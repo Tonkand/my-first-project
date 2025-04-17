@@ -1,31 +1,46 @@
 import spacy
+import pandas as pd
 
-# 加载英文模型（你可以换成 en_core_web_lg 得到更好的相似度）
-nlp = spacy.load("en_core_web_md")
+# 加载大型模型以支持相似度
+nlp = spacy.load("en_core_web_lg")
 
-# 你的equipment词汇
-equipment_list = ["syringe", "centrifuge", "microscope", "scanner"]
+# 你的设备清单（词组）
+equipment_list = ["fluid bed dryer", "centrifuge", "microscope", "syringe", "high-speed mixer"]
 equipment_docs = [nlp(eq) for eq in equipment_list]
 
-# 文章
-text = """
-The team used an advanced microscopy device and a scanning tool. 
-They injected fluid using an injector instead of a syringe.
-"""
+# 模拟一批文章（可替换成从文件或DataFrame读取）
+documents = [
+    "The fluidized drying system is efficient for particle processing.",
+    "Our lab uses a high-resolution microscope and a manual syringe.",
+    "They purchased a centrifugal machine instead of a centrifuge.",
+    "This device is unrelated to any listed equipment.",
+]
 
-doc = nlp(text)
-
-# 阈值设定，相似度越高越接近原词
+# 设置阈值
 SIMILARITY_THRESHOLD = 0.75
 
-# 找到句子中的名词，并比较相似度
-found = []
-for token in doc:
-    if token.pos_ in ["NOUN", "PROPN"]:  # 只考虑名词
-        for eq_doc, eq_name in zip(equipment_docs, equipment_list):
-            if token.similarity(eq_doc) > SIMILARITY_THRESHOLD:
-                found.append((token.text, eq_name, token.similarity(eq_doc)))
+# 保存匹配结果
+results = []
 
-# 打印结果
-for word, matched_eq, score in found:
-    print(f"Found '{word}' similar to '{matched_eq}' (score: {score:.2f})")
+for idx, text in enumerate(documents):
+    doc = nlp(text)
+    matched_items = []
+    
+    # 每句话对每个设备比对一次
+    for eq_doc, eq_name in zip(equipment_docs, equipment_list):
+        sim = doc.similarity(eq_doc)
+        if sim >= SIMILARITY_THRESHOLD:
+            matched_items.append((eq_name, round(sim, 3)))
+    
+    # 记录结果
+    results.append({
+        "doc_id": idx,
+        "text": text,
+        "matched_equipment": [e[0] for e in matched_items],
+        "similarities": [e[1] for e in matched_items]
+    })
+
+# 展示为DataFrame
+df = pd.DataFrame(results)
+from ace_tools import display_dataframe_to_user
+display_dataframe_to_user(name="Equipment Matching Results", dataframe=df)
