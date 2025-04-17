@@ -15,3 +15,26 @@ def get_noun_derivations(word):
 print(get_noun_derivations("decide"))  # ['decision', 'deciding', 'decider']
 print(get_noun_derivations("employ"))  # ['employment', 'employer', 'employee']
 print(get_noun_derivations("fail"))    # ['failure']
+
+
+
+#############
+import nltk
+from nltk.corpus import wordnet as wn
+
+# 如果还没有下载 wordnet，可以先运行一次下面这行
+# nltk.download('wordnet')
+
+def get_noun_forms(word):
+    noun_forms = set()
+    for synset in wn.synsets(word):
+        for lemma in synset.lemmas():
+            # 遍历派生关系
+            for deriv in lemma.derivationally_related_forms():
+                if deriv.synset().pos() == 'n':  # 只保留名词
+                    noun_forms.add(deriv.name())
+    return list(noun_forms)
+
+# 示例
+word = "inform"
+print(get_noun_forms(word))
