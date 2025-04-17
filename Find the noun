@@ -38,3 +38,22 @@ def get_noun_forms(word):
 # 示例
 word = "inform"
 print(get_noun_forms(word))
+
+
+#########
+import nltk
+from nltk.corpus import wordnet as wn
+
+def get_direct_noun_forms(word):
+    noun_forms = set()
+    word = word.lower()
+    for synset in wn.synsets(word, pos=wn.VERB):  # 只从动词的同义词集合找
+        for lemma in synset.lemmas():
+            for deriv in lemma.derivationally_related_forms():
+                name = deriv.name().lower()
+                if deriv.synset().pos() == 'n' and name.startswith(word[:3]):
+                    noun_forms.add(name)
+    return list(noun_forms)
+
+# 示例
+print(get_direct_noun_forms("fail"))
