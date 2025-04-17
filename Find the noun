@@ -57,3 +57,40 @@ def get_direct_noun_forms(word):
 
 # 示例
 print(get_direct_noun_forms("fail"))
+
+#####phrase
+
+import spacy
+import nltk
+from nltk.corpus import wordnet as wn
+
+# 加载 spaCy 英文模型
+nlp = spacy.load("en_core_web_sm")
+
+# 如果还没下载 wordnet，可以先运行
+# nltk.download('wordnet')
+
+def get_noun_forms(word):
+    forms = set()
+    for synset in wn.synsets(word, pos=wn.NOUN):
+        for lemma in synset.lemmas():
+            forms.add(lemma.name())
+    return forms
+
+def extract_noun_forms_from_phrase(phrase):
+    doc = nlp(phrase)
+    noun_forms_map = {}
+
+    for token in doc:
+        if token.pos_ == "NOUN":
+            lemma = token.lemma_.lower()
+            forms = get_noun_forms(lemma)
+            forms.add(lemma)
+            noun_forms_map[token.text] = list(forms)
+    return noun_forms_map
+
+# 示例
+phrase = "sampling area"
+result = extract_noun_forms_from_phrase(phrase)
+print(result)
+
