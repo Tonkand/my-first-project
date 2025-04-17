@@ -62,35 +62,48 @@ print(get_direct_noun_forms("fail"))
 
 import spacy
 import nltk
+import inflect
 from nltk.corpus import wordnet as wn
 
-# 加载 spaCy 英文模型
+# 初始化工具
 nlp = spacy.load("en_core_web_sm")
+p = inflect.engine()
 
-# 如果还没下载 wordnet，可以先运行
+# 确保 wordnet 可用
 # nltk.download('wordnet')
 
-def get_noun_forms(word):
-    forms = set()
-    for synset in wn.synsets(word, pos=wn.NOUN):
+def get_derived_nouns(word):
+    noun_forms = set()
+    for synset in wn.synsets(word):
         for lemma in synset.lemmas():
-            forms.add(lemma.name())
-    return forms
+            for related in lemma.derivationally_related_forms():
+                if related.synset().pos() == 'n':
+                    noun_forms.add(related.name())
+    return noun_forms
 
-def extract_noun_forms_from_phrase(phrase):
+def extract_all_noun_candidates(phrase):
     doc = nlp(phrase)
-    noun_forms_map = {}
+    result = {}
 
     for token in doc:
-        if token.pos_ == "NOUN":
+        if token.pos_ in {"NOUN", "VERB", "PROPN"}:
             lemma = token.lemma_.lower()
-            forms = get_noun_forms(lemma)
-            forms.add(lemma)
-            noun_forms_map[token.text] = list(forms)
-    return noun_forms_map
+            noun_set = get_derived_nouns(lemma)
+            noun_set.add(lemma)
 
-# 示例
+            # 加入复数形式
+            plural_form = p.plural(lemma)
+            if plural_form != lemma:
+                noun_set.add(plural_form)
+
+            result[token.text] = sorted(noun_set)
+
+    return result
+
+# 示例使用
 phrase = "sampling area"
-result = extract_noun_forms_from_phrase(phrase)
-print(result)
+output = extract_all_noun_candidates(phrase)
+for word, forms in output.items():
+    print(f"{word} → {forms}")
+
 
