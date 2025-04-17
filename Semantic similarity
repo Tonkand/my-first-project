@@ -1,14 +1,14 @@
 import spacy
 import pandas as pd
 
-# 加载大型模型以支持相似度
+# 加载大型模型支持短语相似度
 nlp = spacy.load("en_core_web_lg")
 
-# 你的设备清单（词组）
+# 设备列表（可以换成你自己的清单）
 equipment_list = ["fluid bed dryer", "centrifuge", "microscope", "syringe", "high-speed mixer"]
 equipment_docs = [nlp(eq) for eq in equipment_list]
 
-# 模拟一批文章（可替换成从文件或DataFrame读取）
+# 模拟文章列表
 documents = [
     "The fluidized drying system is efficient for particle processing.",
     "Our lab uses a high-resolution microscope and a manual syringe.",
@@ -16,31 +16,57 @@ documents = [
     "This device is unrelated to any listed equipment.",
 ]
 
-# 设置阈值
 SIMILARITY_THRESHOLD = 0.75
-
-# 保存匹配结果
 results = []
 
+# 主循环：每篇文章处理
 for idx, text in enumerate(documents):
     doc = nlp(text)
-    matched_items = []
-    
-    # 每句话对每个设备比对一次
+    matches = []
+
+    # 遍历每个设备，比较它与文本中任意连续词组合的相似度
     for eq_doc, eq_name in zip(equipment_docs, equipment_list):
-        sim = doc.similarity(eq_doc)
-        if sim >= SIMILARITY_THRESHOLD:
-            matched_items.append((eq_name, round(sim, 3)))
-    
-    # 记录结果
+        best_phrase = ""
+        best_score = 0.0
+
+        # 尝试在文本中找出 1 到 4 词长的组合（短语）
+        for i in range(len(doc)):
+            for j in range(i + 1, min(i + 5, len(doc) + 1)):
+                span = doc[i:j]
+                # 过滤空格或标点
+                if not span.text.strip() or any(t.is_punct for t in span): 
+                    continue
+
+                sim = span.similarity(eq_doc)
+                if sim > best_score and sim >= SIMILARITY_THRESHOLD:
+                    best_score = sim
+                    best_phrase = span.text
+
+        if best_phrase:
+            matches.append({
+                "equipment": eq_name,
+                "matched_phrase": best_phrase,
+                "similarity": round(best_score, 3)
+            })
+
     results.append({
         "doc_id": idx,
         "text": text,
-        "matched_equipment": [e[0] for e in matched_items],
-        "similarities": [e[1] for e in matched_items]
+        "matches": matches
     })
 
-# 展示为DataFrame
-df = pd.DataFrame(results)
+# 展平结果
+flattened = []
+for r in results:
+    for match in r["matches"]:
+        flattened.append({
+            "doc_id": r["doc_id"],
+            "text": r["text"],
+            "equipment": match["equipment"],
+            "matched_phrase": match["matched_phrase"],
+            "similarity": match["similarity"]
+        })
+
+df = pd.DataFrame(flattened)
 from ace_tools import display_dataframe_to_user
-display_dataframe_to_user(name="Equipment Matching Results", dataframe=df)
+display_dataframe_to_user(name="Matched Equipment Phrases", dataframe=df)
