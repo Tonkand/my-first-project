@@ -1,0 +1,31 @@
+import spacy
+
+# 加载英文模型（你可以换成 en_core_web_lg 得到更好的相似度）
+nlp = spacy.load("en_core_web_md")
+
+# 你的equipment词汇
+equipment_list = ["syringe", "centrifuge", "microscope", "scanner"]
+equipment_docs = [nlp(eq) for eq in equipment_list]
+
+# 文章
+text = """
+The team used an advanced microscopy device and a scanning tool. 
+They injected fluid using an injector instead of a syringe.
+"""
+
+doc = nlp(text)
+
+# 阈值设定，相似度越高越接近原词
+SIMILARITY_THRESHOLD = 0.75
+
+# 找到句子中的名词，并比较相似度
+found = []
+for token in doc:
+    if token.pos_ in ["NOUN", "PROPN"]:  # 只考虑名词
+        for eq_doc, eq_name in zip(equipment_docs, equipment_list):
+            if token.similarity(eq_doc) > SIMILARITY_THRESHOLD:
+                found.append((token.text, eq_name, token.similarity(eq_doc)))
+
+# 打印结果
+for word, matched_eq, score in found:
+    print(f"Found '{word}' similar to '{matched_eq}' (score: {score:.2f})")
