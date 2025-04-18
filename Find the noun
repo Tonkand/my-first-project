@@ -107,3 +107,60 @@ for word, forms in output.items():
     print(f"{word} → {forms}")
 
 
+######
+import spacy
+import nltk
+import inflect
+from nltk.corpus import wordnet as wn
+
+nlp = spacy.load("en_core_web_sm")
+p = inflect.engine()
+
+# nltk.download('wordnet')
+
+def get_derived_nouns(word):
+    derived = set()
+    for synset in wn.synsets(word):
+        for lemma in synset.lemmas():
+            for related in lemma.derivationally_related_forms():
+                if related.synset().pos() == 'n':
+                    derived.add(related.name())
+    return derived
+
+def get_noun_synonyms(word):
+    synonyms = set()
+    for synset in wn.synsets(word, pos=wn.NOUN):
+        for lemma in synset.lemmas():
+            synonyms.add(lemma.name().lower())
+    return synonyms
+
+def extract_noun_related_forms(phrase):
+    doc = nlp(phrase)
+    result = {}
+
+    for token in doc:
+        if token.pos_ in {"NOUN", "VERB", "PROPN"}:
+            lemma = token.lemma_.lower()
+
+            derived_nouns = get_derived_nouns(lemma)
+            synonyms = get_noun_synonyms(lemma)
+
+            all_forms = set()
+            all_forms.update(derived_nouns)
+            all_forms.update(synonyms)
+            all_forms.add(lemma)
+
+            # 加入复数
+            plural_form = p.plural(lemma)
+            if plural_form != lemma:
+                all_forms.add(plural_form)
+
+            result[token.text] = sorted(all_forms)
+
+    return result
+
+# 示例
+phrase = "sampling area"
+output = extract_noun_related_forms(phrase)
+for word, forms in output.items():
+    print(f"{word} → {forms}")
