@@ -10,3 +10,70 @@ nlp.add_pipe("scispacy_linker", config={"resolve_abbreviations": True, "linker_n
 doc = nlp(your_article_text)
 for ent in doc.ents:
     print(ent.text, ent._.umls_ents)  # 打印实体和对应的UMLS ID（可对应药品名）
+
+
+######
+import spacy
+import pandas as pd
+from itertools import combinations
+from rapidfuzz import fuzz
+from scispacy.abbreviation import AbbreviationDetector
+from scispacy.linking import EntityLinker
+
+# 加载scispaCy模型
+nlp = spacy.load("en_core_sci_sm")
+nlp.add_pipe("abbreviation_detector")
+nlp.add_pipe("scispacy_linker", config={"resolve_abbreviations": True, "linker_name": "umls"})
+
+# 你提供的药品清单（单药和复方药品），注意统一小写
+your_drugs = [
+    "metformin",
+    "atorvastatin",
+    "acetaminophen",
+    "ibuprofen",
+    "amoxicillin clavulanate",
+    "hydrochlorothiazide lisinopril"
+]
+
+# 将复方药转换为标准组合形式
+compound_set = set()
+for drug in your_drugs:
+    tokens = sorted(drug.lower().split())
+    compound_set.add(" ".join(tokens))
+
+# 模拟一个药品相关文本（也可以换成一批文章）
+text = """
+The patient was prescribed Metformin and Atorvastatin. 
+He also received amoxicillin with clavulanate potassium. 
+Later, hydrochlorothiazide and lisinopril were considered.
+"""
+
+# NER识别
+doc = nlp(text)
+ents = [ent.text.lower() for ent in doc.ents if len(ent.text.strip()) > 1]
+
+# 去重并输出识别的药品实体
+detected = list(set(ents))
+
+# 尝试组合成复方药品候选项
+detected_combos = [' '.join(sorted(pair)) for pair in combinations(detected, 2)]
+detected_all = detected + detected_combos
+
+# 匹配逻辑：记录匹配结果、相似度和类型
+results = []
+for found in detected_all:
+    for known in your_drugs:
+        score = fuzz.token_sort_ratio(found, known)
+        if score >= 85:
+            match_type = "compound" if " " in known else "single"
+            results.append({
+                "Detected": found,
+                "Matched With": known,
+                "Similarity": score,
+                "Match Type": match_type
+            })
+
+# 转为 DataFrame
+df = pd.DataFrame(results).drop_duplicates()
+from ace_tools import display_dataframe_to_user
+display_dataframe_to_user("药品识别与匹配结果", df)
