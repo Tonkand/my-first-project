@@ -77,3 +77,35 @@ for found in detected_all:
 df = pd.DataFrame(results).drop_duplicates()
 from ace_tools import display_dataframe_to_user
 display_dataframe_to_user("药品识别与匹配结果", df)
+
+###########
+
+pip install scispacy
+pip install https://huggingface.co/allenai/scispacy_models/resolve/main/en_core_sci_scibert-0.5.1.tar.gz
+pip install https://huggingface.co/allenai/scispacy_models/resolve/main/umls-2020AA-full.tar.gz
+
+import scispacy
+import spacy
+from scispacy.umls_linking import UmlsEntityLinker
+
+# 1. 載入模型
+nlp = spacy.load("en_core_sci_scibert")
+
+# 2. 加入 linker（UMLS 連接器）
+linker = UmlsEntityLinker(resolve_abbreviations=True, name="umls")
+nlp.add_pipe("scispacy_linker", config={"resolve_abbreviations": True, "linker_name": "umls"})
+
+# 3. 測試輸入
+text = "The patient was given metformin and aspirin."
+doc = nlp(text)
+
+# 4. 輸出結果（包含 UMLS CUI）
+for ent in doc.ents:
+    print(f"Text: {ent.text}")
+    for umls_ent in ent._.umls_ents:
+        cui = umls_ent[0]
+        score = umls_ent[1]
+        name = linker.umls.cui_to_entity[cui].canonical_name
+        print(f"  → CUI: {cui}, Name: {name}, Score: {score:.2f}")
+
+
