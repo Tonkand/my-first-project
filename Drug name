@@ -151,7 +151,7 @@ for match in matches:
 import requests
 
 def get_all_properties(rxcui):
-    url = f"https://rxnav.nlm.nih.gov/REST/rxcui/{rxcui}/allProperties.json"
+    url = f"https://rxnav.nlm.nih.gov/REST/rxcui/{rxcui}/allProperties.json?prop=ALL"
     response = requests.get(url)
     if response.status_code == 200:
         data = response.json()
@@ -164,5 +164,6 @@ def get_all_properties(rxcui):
         print(f"Error: Unable to fetch data for RxCUI {rxcui}")
 
 # 示例使用
-rxcui = "1049630"  # 替换为您感兴趣的 RxCUI
+rxcui = "104963"  # 替换为您感兴趣的 RxCUI
 get_all_properties(rxcui)
+
