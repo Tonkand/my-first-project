@@ -80,32 +80,30 @@ display_dataframe_to_user("药品识别与匹配结果", df)
 
 ###########
 
-pip install scispacy
-pip install https://huggingface.co/allenai/scispacy_models/resolve/main/en_core_sci_scibert-0.5.1.tar.gz
-pip install https://huggingface.co/allenai/scispacy_models/resolve/main/umls-2020AA-full.tar.gz
-
-import scispacy
 import spacy
-from scispacy.umls_linking import UmlsEntityLinker
+import scispacy
+from scispacy.linking import EntityLinker
 
-# 1. 載入模型
-nlp = spacy.load("en_core_sci_scibert")
+# 加载基础模型
+nlp = spacy.load("en_core_sci_sm")
 
-# 2. 加入 linker（UMLS 連接器）
-linker = UmlsEntityLinker(resolve_abbreviations=True, name="umls")
-nlp.add_pipe("scispacy_linker", config={"resolve_abbreviations": True, "linker_name": "umls"})
+# 加载 UMLS linker
+linker = EntityLinker(resolve_abbreviations=True, name="umls")
 
-# 3. 測試輸入
-text = "The patient was given metformin and aspirin."
+# 加入到管道中
+nlp.add_pipe("scispacy_linker", config={"resolve_abbreviations": True, "name": "umls"})
+
+# 分析文本
+text = "The patient was given ibuprofen for inflammation."
 doc = nlp(text)
 
-# 4. 輸出結果（包含 UMLS CUI）
+# 输出实体和对应的 UMLS CUI
 for ent in doc.ents:
-    print(f"Text: {ent.text}")
-    for umls_ent in ent._.umls_ents:
+    print(f"Entity: {ent.text}")
+    for umls_ent in ent._.kb_ents:
         cui = umls_ent[0]
         score = umls_ent[1]
-        name = linker.umls.cui_to_entity[cui].canonical_name
-        print(f"  → CUI: {cui}, Name: {name}, Score: {score:.2f}")
+        umls_entry = linker.kb.cui_to_entity[cui]
+        print(f"  - CUI: {cui} | Score: {score:.3f} | Name: {umls_entry.canonical_name}")
 
 
