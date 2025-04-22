@@ -1,0 +1,128 @@
+https://www.nlm.nih.gov/research/umls/rxnorm/docs/index.html
+
+TTY | 全名 | 說明
+IN | Ingredient | 單一藥品成分，例如 Amoxicillin
+MIN | Multiple Ingredients | 多成分藥，例如 Amoxicillin / Clavulanate
+PIN | Precise Ingredient | 更具體的成分（如鹽類、鹽酸鹽）例如 Amoxicillin sodium
+SCD | Semantic Clinical Drug | 通用藥 + 劑量 + 劑型，例如 Amoxicillin 250 MG Oral Capsule
+SBD | Semantic Branded Drug | 品牌藥 + 劑量 + 劑型，例如 Amoxil 250 MG Oral Capsule
+GPCK | Generic Pack | 通用藥包裝，例如 Amoxicillin 250 MG Oral Capsule Pack
+BPCK | Branded Pack | 品牌藥包裝，例如 Amoxil 250 MG Oral Capsule Pack
+BN | Brand Name | 品牌名（不含劑型劑量），例如 Amoxil
+DF | Dose Form | 劑型名稱，如 Oral Capsule
+DFG | Dose Form Group | 劑型類別，如 Oral Dosage Forms（口服類）
+CD | Clinical Drug (DEPRECATED) | 舊版的 clinical drug 條目，已被 SCD 取代
+AB | Branded Drug Abbreviation | 品牌名縮寫，例如 Tylenol（可能映射多個實體）
+SCDF | Semantic Clinical Dose Form | 通用劑型 + 劑型，例如 Amoxicillin Oral Capsule
+SBDF | Semantic Branded Dose Form | 品牌劑型 + 劑型，例如 Amoxil Oral Capsule
+TTY	全名	說明
+CDA	Clinical Drug Component - Abstract	抽象藥品組件，不帶有劑量具體資訊，但代表一個治療成分的「藥劑類型」概念，例如 "Amoxicillin Oral Product"
+CDC	Clinical Drug Component	組件型藥品條目，有劑型但不具品牌與包裝資訊，通常是中間層概念。例如一種成分 + 劑型的組合
+CDD	Clinical Drug	臨床藥品，類似於 SCD，但語義範圍更廣，未必有明確的劑量，例如 “Amoxicillin oral capsule product”
+
+TTY 类型	你可以用它做什么？
+IN, PIN, MIN	获取药品原始成分
+SCD, SBD	获取结构化药品（剂型 + 强度 + 成分）
+BN	获取品牌名映射
+BPCK, GPCK	获取不同包装单位
+
+
+conso_columns = ['rxcui','lat','ts','lui','stt','sui','ispref','rxaui','saui','scui','sdui','sab','tty','code','str','srl','suppress','cvf','test']
+sat_columns = ['rxcui','lui','sui','rxaui','stype','code','atui','satui','atn','sab','atv','suppress','cvf','test']
+upper_list = [item.upper() for item in conso_colum
+
+
+
+              ########
+import pandas as pd
+import difflib
+
+# 读取 RxNorm 数据
+df = conso.copy()
+
+# 只提取结构化药品（SCD, SBD）
+df = df[(df["LAT"] == "ENG") & (df["TTY"].isin(["IN","SCD", "SBD"]))]
+
+def find_top_rxcui_matches(input_text, topn=10):
+    input_text = input_text.lower()
+    names = df["STR"].str.lower().tolist()
+    matches = difflib.get_close_matches(input_text, names, n=topn, cutoff=0.3)
+
+    results = df[df["STR"].str.lower().isin(matches)][["RXCUI", "STR"]].drop_duplicates().head(topn)
+    return results.reset_index(drop=True)
+
+# 示例查询
+query = "Choline fenofibrate"
+top_matches = find_top_rxcui_matches(query)
+print(top_matches)
+
+#########
+####
+# -*- coding: utf-8 -*-
+import pandas as pd
+import numpy as np
+from transformers import AutoTokenizer, AutoModel
+import torch
+from sklearn.metrics.pairwise import cosine_similarity
+
+# ---------- Load PubMedBERT ----------
+tokenizer = AutoTokenizer.from_pretrained("microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract")
+model = AutoModel.from_pretrained("microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract")
+
+# ---------- Get Embedding ----------
+def get_embedding(text):
+    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=32)
+    with torch.no_grad():
+        outputs = model(**inputs)
+    return outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
+
+# ---------- Load RxNorm STR Data ----------
+df_raw = conso.copy()
+df_drugs = df_raw[(df_raw["LAT"] == "ENG") & (df_raw["TTY"].isin(["SCD", "SBD"]))]
+df_drugs = df_drugs[["RXCUI", "STR"]].drop_duplicates().dropna().reset_index(drop=True)
+
+# ---------- Build Embedding Cache ----------
+def build_embedding_cache(df):
+    print("Generating embeddings for RxNorm drugs...")
+    df["embedding"] = df["STR"].apply(get_embedding)
+    return df
+
+# ---------- Batch Search ----------
+def find_top_similar_for_list(query_list, df, topn=10):
+    results = []
+    for query in query_list:
+        query_vec = get_embedding(query)
+        all_vecs = np.stack(df["embedding"].values)
+        sims = cosine_similarity([query_vec], all_vecs)[0]
+        df_temp = df.copy()
+        df_temp["score"] = sims
+        top_hits = df_temp.sort_values("score", ascending=False).head(topn)
+        top_hits["query"] = query
+        results.append(top_hits[["query", "RXCUI", "STR", "score"]])
+    return pd.concat(results).reset_index(drop=True)
+
+# ---------- Drug Similarity Matrix ----------
+def drug_similarity_matrix(drug_list):
+    vecs = [get_embedding(drug) for drug in drug_list]
+    sim_matrix = cosine_similarity(vecs)
+    return pd.DataFrame(sim_matrix, index=drug_list, columns=drug_list)
+
+# ---------- Example ----------
+if __name__ == "__main__":
+    drug_queries = [
+        "amoxicillin and clavulanate potassium",
+        "ibuprofen",
+        "omeprazole",
+        "acetaminophen",
+        "metformin"
+    ]
+
+    df_drugs = build_embedding_cache(df_drugs)
+
+    print("\nTop 10 similar drugs for each:")
+    top_results = find_top_similar_for_list(drug_queries, df_drugs, topn=10)
+    print(top_results)
+
+    print("\nSemantic similarity matrix:")
+    sim_matrix = drug_similarity_matrix(drug_queries)
+    print(sim_matrix.round(3))
