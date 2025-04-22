@@ -1,0 +1,61 @@
+####SPcay supervised 
+
+
+{
+  "text": "The sample was dried using a fluid bed dryer.",
+  "entities": [(33, 49, "EQUIPMENT")]
+}
+
+
+TRAIN_DATA = [
+    ("The sample was dried using a fluid bed dryer.", {"entities": [(33, 49, "EQUIPMENT")]}),
+    ("This report shows performance of the autoclave.", {"entities": [(39, 48, "EQUIPMENT")]}),
+]
+
+import spacy
+from spacy.training.example import Example
+from spacy.util import minibatch, compounding
+import random
+
+nlp = spacy.blank("en")
+ner = nlp.add_pipe("ner")
+ner.add_label("EQUIPMENT")
+
+optimizer = nlp.initialize()
+for itn in range(20):
+    random.shuffle(TRAIN_DATA)
+    batches = minibatch(TRAIN_DATA, size=compounding(4.0, 32.0, 1.001))
+    for batch in batches:
+        for text, annotations in batch:
+            doc = nlp.make_doc(text)
+            example = Example.from_dict(doc, annotations)
+            nlp.update([example], drop=0.5, sgd=optimizer)
+
+nlp.to_disk("equipment_ner_model")
+# 使用：
+nlp = spacy.load("equipment_ner_model")
+doc = nlp("Clean the chamber with a rotating spray dryer.")
+for ent in doc.ents:
+    print(ent.text, ent.label_)
+
+####unsupervised
+
+from transformers import AutoTokenizer, AutoModel
+import torch
+import numpy as np
+
+equipment_list = ["fluid bed dryer", "autoclave", "centrifuge"]
+text = "The sample was dried in a fluidized dryer chamber."
+
+tokenizer = AutoTokenizer.from_pretrained("microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract")
+model = AutoModel.from_pretrained("microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract")
+
+def get_embedding(text):
+    inputs = tokenizer(text, return_tensors="pt", truncation=True)
+    with torch.no_grad():
+        outputs = model(**inputs)
+    return outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
+
+text_emb = get_embedding(text)
+scores = [(eq, np.dot(get_embedding(eq), text_emb)) for eq in equipment_list]
+print(sorted(scores, key=lambda x: -x[1]))
