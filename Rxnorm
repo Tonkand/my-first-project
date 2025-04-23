@@ -30,10 +30,53 @@ BPCK, GPCK	获取不同包装单位
 conso_columns = ['rxcui','lat','ts','lui','stt','sui','ispref','rxaui','saui','scui','sdui','sab','tty','code','str','srl','suppress','cvf','test']
 sat_columns = ['rxcui','lui','sui','rxaui','stype','code','atui','satui','atn','sab','atv','suppress','cvf','test']
 upper_list = [item.upper() for item in conso_colum
+RXNREL = pd.read_csv("RXNREL.RRF", sep='|', header=None, dtype=str)
+RXNREL_columns = ["RXCUI1","RXAUI1","STYPE1","REL","RXCUI2","RXAUI2","STYPE2","RELA","RUI","SRUI","SAB","SL","RG","DIR","SUPPRESS","CVF","test"]
+RXNREL.columns = RXNREL_columns
+######
 
 
+####
+import pandas as pd
 
-              ########
+# 載入所需的 RRF 檔案（注意 sep='\t'，RxNorm 是 | 分隔）
+rxnsat = pd.read_csv("RXNSAT.RRF", sep="|", header=None, dtype=str, usecols=[0, 3, 4, 5])
+rxnsat.columns = ['RXCUI', 'ATN', 'SAB', 'ATV']
+
+rxnrel = pd.read_csv("RXNREL.RRF", sep="|", header=None, dtype=str, usecols=[0, 4, 7])
+rxnrel.columns = ['RXCUI1', 'RXCUI2', 'REL']  # REL = 'has_ingredient'
+
+rxnconso = pd.read_csv("RXNCONSO.RRF", sep="|", header=None, dtype=str, usecols=[0, 14])
+rxnconso.columns = ['RXCUI', 'STR']
+
+# 🔍 1. 找出該 application number 對應的 RXCUI
+application_number = "ANDA076683"
+target_rx = rxnsat[(rxnsat['ATN'] == 'APPLICATION_NUMBER') & (rxnsat['ATV'] == application_number)]
+
+if target_rx.empty:
+    print("❌ 找不到對應的 RXCUI")
+else:
+    rxcui = target_rx.iloc[0]['RXCUI']
+    print(f"✅ 找到 RXCUI: {rxcui}")
+
+    # 🔍 2. 從 RXNREL 找出 has_ingredient 或 consists_of 的成分 RXCUI
+    ingredient_rel = rxnrel[
+        (rxnrel['RXCUI1'] == rxcui) &
+        (rxnrel['REL'].isin(['has_ingredient', 'consists_of']))
+    ]
+
+    if ingredient_rel.empty:
+        print("⚠️ 沒找到成分關係")
+    else:
+        ingredient_rxcuis = ingredient_rel['RXCUI2'].unique()
+
+        # 🔍 3. 從 RXNCONSO 找出這些成分的名稱
+        ingredient_names = rxnconso[rxnconso['RXCUI'].isin(ingredient_rxcuis)]
+        print("💊 Active Ingredient(s):")
+        for name in ingredient_names['STR'].unique():
+            print(" -", name)
+
+########
 import pandas as pd
 import difflib
 
