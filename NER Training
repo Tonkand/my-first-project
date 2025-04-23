@@ -1,42 +1,201 @@
 ####SPcay supervised 
 
-
-{
-  "text": "The sample was dried using a fluid bed dryer.",
-  "entities": [(33, 49, "EQUIPMENT")]
-}
-
-
-TRAIN_DATA = [
-    ("The sample was dried using a fluid bed dryer.", {"entities": [(33, 49, "EQUIPMENT")]}),
-    ("This report shows performance of the autoclave.", {"entities": [(39, 48, "EQUIPMENT")]}),
-]
-
 import spacy
+import scispacy
 from spacy.training.example import Example
-from spacy.util import minibatch, compounding
+from scispacy.linking import EntityLinker
+import pandas as pd
+import os
 import random
+from spacy.util import minibatch, compounding
 
-nlp = spacy.blank("en")
-ner = nlp.add_pipe("ner")
+# -----------------------
+# Step 1: 使用 scispaCy 的基础模型
+# -----------------------
+base_model = "en_core_sci_sm"  # or en_core_sci_sm
+nlp = spacy.load(base_model)
+
+# -----------------------
+# Step 2: 微调现有的 NER，加入自定义标签 EQUIPMENT
+# -----------------------
+ner = nlp.get_pipe("ner")  # ✅ 修复：不再 add_pipe，直接 get_pipe
 ner.add_label("EQUIPMENT")
 
-optimizer = nlp.initialize()
-for itn in range(20):
+# -----------------------
+# Step 3: 准备训练数据（支持多个实体）
+# -----------------------
+data = pd.DataFrame({
+    "text": [
+        "The centrifuge and spray dryer were calibrated.",
+        "Place the sample in the laminar airflow cabinet.",
+        "We cleaned the rotary evaporator and autoclave.",
+        "The fluid bed dryer and centrifuge require maintenance."
+    ],
+    "equipment": [
+        ["centrifuge", "spray dryer"],
+        ["laminar airflow cabinet"],
+        ["rotary evaporator", "autoclave"],
+        ["fluid bed dryer", "centrifuge"]
+    ]
+})
+
+def create_multi_entity_data(df, label="EQUIPMENT"):
+    train_data = []
+    for _, row in df.iterrows():
+        text = row["text"]
+        entities = []
+        for entity_str in row["equipment"]:
+            start = text.lower().find(entity_str.lower())
+            if start == -1:
+                raise ValueError(f"Entity '{entity_str}' not found in: {text}")
+            end = start + len(entity_str)
+            entities.append((start, end, label))
+        train_data.append((text, {"entities": entities}))
+    return train_data
+
+TRAIN_DATA = create_multi_entity_data(data)
+
+# -----------------------
+# Step 4: 微调训练
+# -----------------------
+optimizer = nlp.resume_training()
+for itn in range(30):
     random.shuffle(TRAIN_DATA)
+    losses = {}
     batches = minibatch(TRAIN_DATA, size=compounding(4.0, 32.0, 1.001))
     for batch in batches:
         for text, annotations in batch:
             doc = nlp.make_doc(text)
             example = Example.from_dict(doc, annotations)
-            nlp.update([example], drop=0.5, sgd=optimizer)
+            nlp.update([example], sgd=optimizer, drop=0.3, losses=losses)
+    print(f"Iteration {itn+1}, Losses: {losses}")
 
-nlp.to_disk("equipment_ner_model")
-# 使用：
-nlp = spacy.load("equipment_ner_model")
-doc = nlp("Clean the chamber with a rotating spray dryer.")
-for ent in doc.ents:
-    print(ent.text, ent.label_)
+# -----------------------
+# Step 5: 加入 UMLS 实体链接器（如尚未加入）
+# -----------------------
+if "scispacy_linker" not in nlp.pipe_names:
+    nlp.add_pipe("scispacy_linker", config={
+        "resolve_abbreviations": True,
+        "name": "umls"
+    }, last=True)
+
+# -----------------------
+# Step 6: 保存模型
+# -----------------------
+output_dir = "equipment_ner_with_umls"
+os.makedirs(output_dir, exist_ok=True)
+nlp.to_disk(output_dir)
+print(f"\n✅ Model saved to: {output_dir}")
+
+# -----------------------
+# Step 7: 测试模型
+# -----------------------
+print("\n--- Test Results ---")
+test_texts = [
+    "The laminar airflow cabinet is broken.",
+    "Clean the autoclave and fluid bed dryer before use.",
+    "He used a rotary evaporator and a centrifuge for distillation.",
+    "Aspirin is not part of the equipment list but is a CHEMICAL."
+]
+
+for text in test_texts:
+    doc = nlp(text)
+    print(f"\nText: {text}")
+    
+    print("  → 自定义设备实体:")
+    for ent in doc.ents:
+        if ent.label_ == "EQUIPMENT":
+            print(f"    - {ent.text} ({ent.label_})")
+    
+    print("  → UMLS 实体链接:")
+    for ent in doc.ents:
+        if ent._.kb_ents:
+            top = ent._.kb_ents[0]
+            cui = top[0]
+            score = top[1]
+            name = nlp.get_pipe("scispacy_linker").kb.cui_to_entity[cui].canonical_name
+            print(f"    - {ent.text} → UMLS: {name} (CUI: {cui}, Score: {score:.3f})")
+
+######
+import spacy
+from spacy.training.example import Example
+from spacy.util import minibatch, compounding
+import random
+import os
+import pandas as pd
+
+# 创建包含多个实体的 DataFrame
+data = pd.DataFrame({
+    "text": [
+        "The centrifuge and spray dryer were calibrated.",
+        "Place the sample in the laminar airflow cabinet.",
+        "We cleaned the rotary evaporator and autoclave.",
+        "The fluid bed dryer and centrifuge require maintenance."
+    ],
+    "equipment": [
+        ["centrifuge", "spray dryer"],
+        ["laminar airflow cabinet"],
+        ["rotary evaporator", "autoclave"],
+        ["fluid bed dryer", "centrifuge"]
+    ]
+})
+
+# 将 DataFrame 转换为 spaCy 训练格式
+def create_multi_entity_data(df, label="EQUIPMENT"):
+    train_data = []
+    for _, row in df.iterrows():
+        text = row["text"]
+        entities = []
+        for entity_str in row["equipment"]:
+            start = text.lower().find(entity_str.lower())
+            if start == -1:
+                raise ValueError(f"Entity '{entity_str}' not found in: {text}")
+            end = start + len(entity_str)
+            entities.append((start, end, label))
+        train_data.append((text, {"entities": entities}))
+    return train_data
+
+TRAIN_DATA = create_multi_entity_data(data)
+
+# 初始化 spaCy 空模型
+nlp = spacy.blank("en")
+ner = nlp.add_pipe("ner")
+ner.add_label("EQUIPMENT")
+optimizer = nlp.initialize()
+
+# 开始训练
+for itn in range(30):
+    random.shuffle(TRAIN_DATA)
+    losses = {}
+    batches = minibatch(TRAIN_DATA, size=compounding(4.0, 32.0, 1.001))
+    for batch in batches:
+        for text, annotations in batch:
+            doc = nlp.make_doc(text)
+            example = Example.from_dict(doc, annotations)
+            nlp.update([example], sgd=optimizer, drop=0.3, losses=losses)
+    print(f"Iteration {itn+1}, Losses: {losses}")
+
+# 保存模型
+output_dir = "equipment_ner_model"
+os.makedirs(output_dir, exist_ok=True)
+nlp.to_disk(output_dir)
+print(f"\n✅ Model saved to: {output_dir}")
+
+# 测试模型
+print("\n--- Model Test ---")
+test_texts = [
+    "Clean the chamber with a spray dryer and a rotary evaporator.",
+    "Put the sample in a fluid bed dryer.",
+    "Load the autoclave and centrifuge for sterilization.",
+    "The laminar airflow cabinet is broken."
+]
+
+for text in test_texts:
+    doc = nlp(text)
+    print(f"\nInput: {text}")
+    for ent in doc.ents:
+        print(f"  -> {ent.text} ({ent.label_})")
+
 
 ####unsupervised
 
