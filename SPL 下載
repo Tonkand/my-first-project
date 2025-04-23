@@ -1,0 +1,119 @@
+
+import os
+import zipfile
+import xml.etree.ElementTree as ET
+import pandas as pd
+
+# === 設定 ===
+spl_zip_folder = "spl_zip_files/"
+output_csv = "spl_full_summary.csv"
+ns = {'hl7': 'urn:hl7-org:v3'}
+
+# === 解壓 ZIP 並取得 XML 路徑 ===
+extract_dir = "spl_extracted/"
+os.makedirs(extract_dir, exist_ok=True)
+extracted_files = []
+
+for fname in os.listdir(spl_zip_folder):
+    if fname.endswith(".zip"):
+        with zipfile.ZipFile(os.path.join(spl_zip_folder, fname), 'r') as zip_ref:
+            for file in zip_ref.namelist():
+                if file.endswith(".xml"):
+                    zip_ref.extract(file, extract_dir)
+                    extracted_files.append(os.path.join(extract_dir, file))
+
+# === 擷取 Application Number 函式 ===
+def extract_application_number_precise(root):
+    for el in root.findall(".//hl7:id", namespaces=ns):
+        root_attr = el.attrib.get("root", "").strip()
+        ext_attr = el.attrib.get("extension", "").strip()
+        if root_attr == "2.16.840.1.113883.3.150" and ext_attr:
+            return ext_attr
+    return ""
+
+# === 主函式：抽取藥品資訊（正確抓取 active ingredient 與 active moiety） ===
+def extract_spl_info(xml_path):
+    try:
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+
+        title = root.findtext(".//hl7:title", namespaces=ns)
+        drug_name = root.findtext(".//hl7:manufacturedProduct/hl7:name", namespaces=ns)
+
+        form_code = root.find(".//hl7:formCode", namespaces=ns)
+        dose_form = form_code.attrib.get("displayName") if form_code is not None else None
+
+        # 抓取 NDC 與 active_ingredient
+        def extract_all_ingredients(root):
+            ingredients = set()
+            for ing in root.findall(".//hl7:ingredient", namespaces=ns):
+                name_elem = ing.find("hl7:ingredientSubstance/hl7:name", namespaces=ns)
+                if name_elem is not None and name_elem.text:
+                    ingredients.add(name_elem.text.strip())
+            return ", ".join(sorted(ingredients))
+
+        ingredients = extract_all_ingredients(root)
+
+        # 提取來自 UMLS codeSystem 的 active ingredient 名稱
+        active_ingredient_from_code = None
+        for el in root.findall(".//hl7:ingredientSubstance", namespaces=ns):
+            code_el = el.find("hl7:code", namespaces=ns)
+            name_el = el.find("hl7:name", namespaces=ns)
+            if code_el is not None and name_el is not None:
+                if code_el.attrib.get("codeSystem") == "2.16.840.1.113883.4.9":
+                    active_ingredient_from_code = name_el.text.strip()
+                    break
+
+
+        ndc_code, active_ingredient = None, None
+        for prod in root.findall(".//hl7:manufacturedProduct", namespaces=ns):
+            code = prod.find(".//hl7:code[@codeSystem='2.16.840.1.113883.6.69']", namespaces=ns)
+            name = prod.find(".//hl7:name", namespaces=ns)
+            if code is not None:
+                ndc_code = code.attrib.get("code")
+                if name is not None and name.text:
+                    active_ingredient = name.text.strip()
+                break
+
+        # 製造商
+        manufacturer = root.findtext(".//hl7:representedOrganization/hl7:name", namespaces=ns)
+
+        # Application Number
+        application_number = extract_application_number_precise(root)
+
+        # Product type
+        product_type_elem = root.find(".//hl7:code", namespaces=ns)
+        product_type = product_type_elem.attrib.get("displayName") if product_type_elem is not None else None
+
+        # Route of administration
+        route_elems = root.findall(".//hl7:routeCode", namespaces=ns)
+        routes = list(set(el.attrib.get("displayName") for el in route_elems if "displayName" in el.attrib))
+        route_of_administration = ", ".join(routes) if routes else None
+
+        # Active moiety
+        moiety_names = root.findall(".//hl7:activeMoiety/hl7:activeMoiety/hl7:name", namespaces=ns)
+        active_moieties = ", ".join(sorted(set(el.text.strip() for el in moiety_names if el.text)))
+
+        return {
+            "active_ingredient": active_ingredient_from_code,
+            "file_name": os.path.basename(xml_path),
+            "title": title.strip() if title else None,
+            "drug_name": drug_name,
+            "dose_form": dose_form,
+            "manufacturer": manufacturer,
+            "application_number": application_number,
+            "ndc_code": ndc_code,
+            "product_type": product_type,
+            "route_of_administration": route_of_administration,
+            "ingredients": ingredients,
+            "active_moieties": active_moieties
+        }
+    except Exception as e:
+        return {
+            "active_ingredient": active_ingredient_from_code,"file_name": os.path.basename(xml_path), "error": str(e)}
+
+# === 批次執行並匯出 CSV ===
+data = [extract_spl_info(path) for path in extracted_files]
+df = pd.DataFrame(data)
+df.to_csv(output_csv, index=False)
+print(f"✅ 完成！已匯出至 {output_csv}")
