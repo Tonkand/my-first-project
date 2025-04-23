@@ -1,0 +1,61 @@
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+def create_centered_pie_subplots(pie_data, rows, cols, titles=None, fig_title=None):
+    fig = make_subplots(
+        rows=rows,
+        cols=cols,
+        specs=[[{'type': 'domain'} for _ in range(cols)] for _ in range(rows)],
+    )
+
+    annotations = []
+    domain_width = 1.0 / cols
+
+    for i, (labels, values) in enumerate(pie_data):
+        row = i // cols + 1
+        col = i % cols + 1
+        fig.add_trace(go.Pie(labels=labels, values=values), row, col)
+
+        # 自动计算 x 居中
+        x_center = domain_width * (col - 0.5)
+        y_position = 1.0 - 0.15 * (row - 1)  # 每行往下移动一点
+
+        annotations.append(dict(
+            x=x_center, y=y_position,
+            xref='paper', yref='paper',
+            text=titles[i] if titles else f"Pie {i+1}",
+            showarrow=False,
+            font=dict(size=14)
+        ))
+
+    # 添加居中的主标题 annotation（位置比所有图标题略高）
+    if fig_title:
+        annotations.append(dict(
+            x=0.5, y=1.15,
+            xref='paper', yref='paper',
+            text=f"<b>{fig_title}</b>",
+            showarrow=False,
+            font=dict(size=18)
+        ))
+
+    fig.update_layout(
+        annotations=annotations,
+        height=300 * rows + 80,  # 留出标题空间
+        width=400 * cols,
+        margin=dict(t=120)
+    )
+    fig.show()
+pie_data = [
+    (['Short', 'Medium', 'Very long label'], [10, 20, 30]),
+    (['Apple', 'Banana', 'Cherry'], [30, 10, 60]),
+    (['Cat', 'Dog', 'Mouse'], [40, 25, 35]),
+]
+
+titles = ['Fruit A', 'Fruit B', 'Fruit C']
+
+create_centered_pie_subplots(
+    pie_data,
+    rows=1, cols=3,
+    titles=titles,
+    fig_title="Overall Category Distribution"
+)
