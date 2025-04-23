@@ -1,0 +1,39 @@
+#####
+
+import requests
+
+def get_approximate_matches(drug_name, max_entries=5):
+    url = "https://rxnav.nlm.nih.gov/REST/approximateTerm.json"
+    params = {
+        "term": drug_name,
+        "maxEntries": max_entries
+    }
+    response = requests.get(url, params=params)
+    if response.status_code != 200:
+        return []
+    data = response.json()
+    candidates = data.get("approximateGroup", {}).get("candidate", [])
+    results = []
+    for candidate in candidates:
+        rxcui = candidate.get("rxcui")
+        score = candidate.get("score")
+        # 获取药品名称
+        name_url = f"https://rxnav.nlm.nih.gov/REST/rxcui/{rxcui}/properties.json"
+        name_resp = requests.get(name_url)
+        if name_resp.status_code == 200:
+            name_data = name_resp.json()
+            name = name_data.get("properties", {}).get("name", "")
+        else:
+            name = ""
+        results.append({
+            "RxCUI": rxcui,
+            "Name": name,
+            "Score": score
+        })
+    return results
+
+# 示例使用
+drug_name = "lisinopril hydrochlorot"
+matches = get_approximate_matches(drug_name)
+for match in matches:
+    print(f"RxCUI: {match['RxCUI']}, Name: {match['Name']}, Score: {match['Score']}")
