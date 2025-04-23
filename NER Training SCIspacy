@@ -1,0 +1,243 @@
+######Version 1
+import spacy
+import scispacy
+from spacy.training.example import Example
+from scispacy.linking import EntityLinker
+import pandas as pd
+import os
+import random
+from spacy.util import minibatch, compounding
+
+# -----------------------
+# Step 1: 使用 scispaCy 的基础模型
+# -----------------------
+base_model = "en_core_sci_sm"  # or en_core_sci_sm
+nlp = spacy.load(base_model)
+
+# -----------------------
+# Step 2: 微调现有的 NER，加入自定义标签 EQUIPMENT
+# -----------------------
+ner = nlp.get_pipe("ner")  # ✅ 修复：不再 add_pipe，直接 get_pipe
+ner.add_label("EQUIPMENT")
+
+# -----------------------
+# Step 3: 准备训练数据（支持多个实体）
+# -----------------------
+data = pd.DataFrame({
+    "text": [
+        "The centrifuge and spray dryer were calibrated.",
+        "Place the sample in the laminar airflow cabinet.",
+        "We cleaned the rotary evaporator and autoclave.",
+        "The fluid bed dryer and centrifuge require maintenance."
+    ],
+    "equipment": [
+        ["centrifuge", "spray dryer"],
+        ["laminar airflow cabinet"],
+        ["rotary evaporator", "autoclave"],
+        ["fluid bed dryer", "centrifuge"]
+    ]
+})
+
+def create_multi_entity_data(df, label="EQUIPMENT"):
+    train_data = []
+    for _, row in df.iterrows():
+        text = row["text"]
+        entities = []
+        for entity_str in row["equipment"]:
+            start = text.lower().find(entity_str.lower())
+            if start == -1:
+                raise ValueError(f"Entity '{entity_str}' not found in: {text}")
+            end = start + len(entity_str)
+            entities.append((start, end, label))
+        train_data.append((text, {"entities": entities}))
+    return train_data
+
+TRAIN_DATA = create_multi_entity_data(data)
+
+# -----------------------
+# Step 4: 微调训练
+# -----------------------
+optimizer = nlp.resume_training()
+for itn in range(30):
+    random.shuffle(TRAIN_DATA)
+    losses = {}
+    batches = minibatch(TRAIN_DATA, size=compounding(4.0, 32.0, 1.001))
+    for batch in batches:
+        for text, annotations in batch:
+            doc = nlp.make_doc(text)
+            example = Example.from_dict(doc, annotations)
+            nlp.update([example], sgd=optimizer, drop=0.3, losses=losses)
+    print(f"Iteration {itn+1}, Losses: {losses}")
+
+# -----------------------
+# Step 5: 加入 UMLS 实体链接器（如尚未加入）
+# -----------------------
+if "scispacy_linker" not in nlp.pipe_names:
+    nlp.add_pipe("scispacy_linker", config={
+        "resolve_abbreviations": True,
+        "name": "umls"
+    }, last=True)
+
+# -----------------------
+# Step 6: 保存模型
+# -----------------------
+output_dir = "equipment_ner_with_umls"
+os.makedirs(output_dir, exist_ok=True)
+nlp.to_disk(output_dir)
+print(f"\n✅ Model saved to: {output_dir}")
+
+# -----------------------
+# Step 7: 测试模型
+# -----------------------
+print("\n--- Test Results ---")
+test_texts = [
+    "The laminar airflow cabinet is broken.",
+    "Clean the autoclave and fluid bed dryer before use.",
+    "He used a rotary evaporator and a centrifuge for distillation.",
+    "Aspirin is not part of the equipment list but is a CHEMICAL."
+]
+
+for text in test_texts:
+    doc = nlp(text)
+    print(f"\nText: {text}")
+    
+    print("  → 自定义设备实体:")
+    for ent in doc.ents:
+        if ent.label_ == "EQUIPMENT":
+            print(f"    - {ent.text} ({ent.label_})")
+    
+    print("  → UMLS 实体链接:")
+    for ent in doc.ents:
+        if ent._.kb_ents:
+            top = ent._.kb_ents[0]
+            cui = top[0]
+            score = top[1]
+            name = nlp.get_pipe("scispacy_linker").kb.cui_to_entity[cui].canonical_name
+            print(f"    - {ent.text} → UMLS: {name} (CUI: {cui}, Score: {score:.3f})")
+
+
+
+
+
+######Version 2
+import spacy
+import scispacy
+from spacy.training.example import Example
+from scispacy.linking import EntityLinker
+import pandas as pd
+import os
+import random
+from spacy.util import minibatch, compounding
+
+# -----------------------
+# Step 1: Load scispaCy base model
+# -----------------------
+nlp = spacy.load("en_core_sci_sm")
+
+# -----------------------
+# Step 2: Add EQUIPMENT label to existing NER pipe
+# -----------------------
+ner = nlp.get_pipe("ner")
+ner.add_label("EQUIPMENT")
+
+# -----------------------
+# Step 3: Create training data with both positive and negative examples
+# -----------------------
+data = pd.DataFrame({
+    "text": [
+        "The centrifuge and spray dryer were calibrated.",
+        "Place the sample in the laminar airflow cabinet.",
+        "We cleaned the rotary evaporator and autoclave.",
+        "The fluid bed dryer and centrifuge require maintenance."
+    ],
+    "equipment": [
+        ["centrifuge", "spray dryer"],
+        ["laminar airflow cabinet"],
+        ["rotary evaporator", "autoclave"],
+        ["fluid bed dryer", "centrifuge"]
+    ]
+})
+
+negative_examples = [
+    ("Aspirin was prescribed for the patient.", []),
+    ("The blood sample was stored at -80°C.", []),
+    ("We used sodium chloride as a buffer.", [])
+]
+
+def create_multi_entity_data(df, label="EQUIPMENT"):
+    train_data = []
+    for _, row in df.iterrows():
+        text = row["text"]
+        entities = []
+        for entity_str in row["equipment"]:
+            start = text.lower().find(entity_str.lower())
+            if start == -1:
+                raise ValueError(f"Entity '{entity_str}' not found in: {text}")
+            end = start + len(entity_str)
+            entities.append((start, end, label))
+        train_data.append((text, {"entities": entities}))
+    return train_data
+
+TRAIN_DATA = create_multi_entity_data(data)
+TRAIN_DATA += [(text, {"entities": entities}) for text, entities in negative_examples]
+
+# -----------------------
+# Step 4: Train NER model
+# -----------------------
+optimizer = nlp.resume_training()
+for itn in range(30):
+    random.shuffle(TRAIN_DATA)
+    losses = {}
+    batches = minibatch(TRAIN_DATA, size=compounding(4.0, 32.0, 1.001))
+    for batch in batches:
+        for text, annotations in batch:
+            doc = nlp.make_doc(text)
+            example = Example.from_dict(doc, annotations)
+            nlp.update([example], sgd=optimizer, drop=0.3, losses=losses)
+    print(f"Iteration {itn+1}, Losses: {losses}")
+
+# -----------------------
+# Step 5: Add UMLS linker (if not present)
+# -----------------------
+if "scispacy_linker" not in nlp.pipe_names:
+    nlp.add_pipe("scispacy_linker", config={"resolve_abbreviations": True}, last=True)
+linker = nlp.get_pipe("scispacy_linker")
+
+# -----------------------
+# Step 6: Save model
+# -----------------------
+output_dir = "equipment_ner_with_filters"
+os.makedirs(output_dir, exist_ok=True)
+nlp.to_disk(output_dir)
+print(f"\n✅ Model saved to: {output_dir}")
+
+# -----------------------
+# Step 7: Test model with UMLS type filtering
+# -----------------------
+test_texts = [
+    "The laminar airflow cabinet is broken.",
+    "Clean the autoclave and fluid bed dryer before use.",
+    "He used a rotary evaporator and a centrifuge for distillation.",
+    "Aspirin is not part of the equipment list but is a CHEMICAL."
+]
+
+print("\n--- Test Results ---")
+for text in test_texts:
+    doc = nlp(text)
+    print(f"\nText: {text}")
+
+    print("  → 自定义设备实体（过滤 CHEMICAL 类型）:")
+    for ent in doc.ents:
+        if ent.label_ == "EQUIPMENT":
+            is_chemical = False
+            if ent._.kb_ents:
+                top = ent._.kb_ents[0]
+                cui = top[0]
+                kb_entity = linker.kb.cui_to_entity.get(cui, None)
+                if kb_entity and "Chemical" in kb_entity.types:
+                    is_chemical = True
+            if not is_chemical:
+                print(f"    - {ent.text} ({ent.label_})")
+            else:
+                print(f"    - ⚠️ 排除 {ent.text}（它是 CHEMICAL 类型）")
+
