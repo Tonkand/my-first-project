@@ -49,7 +49,7 @@ def create_multi_entity_data(df, label="EQUIPMENT"):
             if start == -1:
                 raise ValueError(f"Entity '{entity_str}' not found in: {text}")
             end = start + len(entity_str)
-            span = doc.char_span(start, end, label=label, alignment_mode="contract")
+            span = doc.char_span(start, end, label=label, alignment_mode="expand")
             if span:
                 spans.append(span)
             else:
