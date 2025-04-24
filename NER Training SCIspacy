@@ -42,7 +42,7 @@ def create_multi_entity_data(df, label="EQUIPMENT"):
     train_data = []
     for _, row in df.iterrows():
         text = row["text"]
-        doc = nlp.make_doc(text)
+        doc = nlp(text)
         spans = []
         for entity_str in row["equipment"]:
             start = text.lower().find(entity_str.lower())
