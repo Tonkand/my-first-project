@@ -158,28 +158,34 @@ data = pd.DataFrame({
     ]
 })
 
-negative_examples = [
-    ("Aspirin was prescribed for the patient.", []),
-    ("The blood sample was stored at -80°C.", []),
-    ("We used sodium chloride as a buffer.", [])
-]
+negative_df = pd.DataFrame({
+    "text": [
+        "Aspirin was prescribed for the patient.",
+        "The blood sample was stored at -80°C.",
+        "We used sodium chloride as a buffer."
+    ],
+    "equipment": [[] for _ in range(3)]
+})
 
 def create_multi_entity_data(df, label="EQUIPMENT"):
     train_data = []
     for _, row in df.iterrows():
         text = row["text"]
         entities = []
+        spans = []
         for entity_str in row["equipment"]:
             start = text.lower().find(entity_str.lower())
             if start == -1:
                 raise ValueError(f"Entity '{entity_str}' not found in: {text}")
             end = start + len(entity_str)
-            entities.append((start, end, label))
-        train_data.append((text, {"entities": entities}))
+            spans.append((start, end, label))
+            # Avoid assigning overlapping entities to doc.ents, store in spans only
+        train_data.append((text, {"entities": [s for i, s in enumerate(spans)
+                                               if not any((s[0] < other[1] and s[1] > other[0]) for j, other in enumerate(spans) if i != j)],
+                                     "spans": {"equipment": spans}}))
     return train_data
 
 TRAIN_DATA = create_multi_entity_data(data)
-TRAIN_DATA += [(text, {"entities": entities}) for text, entities in negative_examples]
 
 # -----------------------
 # Step 4: Train NER model
