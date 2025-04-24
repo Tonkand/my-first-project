@@ -183,18 +183,26 @@ def create_multi_entity_data(df, label="EQUIPMENT"):
     train_data = []
     for _, row in df.iterrows():
         text = row["text"]
-        entities = []
+        doc = nlp(text)
         spans = []
         for entity_str in row["equipment"]:
             start = text.lower().find(entity_str.lower())
             if start == -1:
                 raise ValueError(f"Entity '{entity_str}' not found in: {text}")
             end = start + len(entity_str)
-            spans.append((start, end, label))
-            # Avoid assigning overlapping entities to doc.ents, store in spans only
-        train_data.append((text, {"entities": [s for i, s in enumerate(spans)
-                                               if not any((s[0] < other[1] and s[1] > other[0]) for j, other in enumerate(spans) if i != j)],
-                                     "spans": {"equipment": spans}}))
+            span = doc.char_span(start, end, label=label, alignment_mode="expand")
+            if span:
+                spans.append(span)
+            else:
+                print(f"⚠️ 无法创建 span: '{entity_str}' in: {text}")
+        doc.spans["equipment"] = spans
+        non_overlapping = []
+        seen_tokens = set()
+        for span in spans:
+            if not seen_tokens.intersection(set(range(span.start, span.end))):
+                non_overlapping.append((span.start_char, span.end_char, span.label_))
+                seen_tokens.update(range(span.start, span.end))
+        train_data.append((text, {"entities": non_overlapping}))
     return train_data
 
 TRAIN_DATA = create_multi_entity_data(data)
