@@ -85,3 +85,53 @@ Only 5 people are in HR.
 employee_data = find_employee_numbers(text)
 for item in employee_data:
     print(item)
+
+
+####### verison 3
+
+import spacy
+import pandas as pd
+
+# 加载 spaCy 模型
+nlp = spacy.load("en_core_web_sm")
+
+# 员工相关名词和动词
+employee_nouns = {"employee", "employees", "staff", "personnel", "headcount", "workforce", "individuals"}
+employee_verbs = {"employ", "hire", "retain", "recruit", "staff"}
+
+def find_employee_numbers_with_verbs(text, max_distance=10):
+    doc = nlp(text)
+
+    number_indices = [(i, token) for i, token in enumerate(doc) if token.like_num]
+    results = []
+
+    for num_idx, num_token in number_indices:
+        number = None
+        try:
+            number = int(num_token.text.replace(",", ""))
+        except ValueError:
+            continue
+
+        context_tokens = doc[max(0, num_idx - max_distance): min(len(doc), num_idx + max_distance + 1)]
+        context_text = context_tokens.text.lower()
+
+        # 检查上下文是否包含员工相关名词或动词
+        if any(word in context_text for word in employee_nouns.union(employee_verbs)):
+            results.append({
+                "Number": number,
+                "Context": context_tokens.text,
+                "Sentence": num_token.sent.text
+            })
+
+    return pd.DataFrame(results)
+
+# 示例文本
+text = """
+We currently employ 120 full-time staff and 30 part-time employees.
+The firm employs 1,713 individuals at the manufacturing site.
+In 2020, the number of employees was around 98. The HR hired 5 engineers last year.
+"""
+
+df = find_employee_numbers_with_verbs(text)
+import ace_tools as tools; tools.display_dataframe_to_user(name="Employee Numbers with Verb Context", dataframe=df)
+
