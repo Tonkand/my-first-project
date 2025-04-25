@@ -176,4 +176,108 @@ df = find_employee_numbers_with_location(sentences)
 import ace_tools as tools; tools.display_dataframe_to_user(name="Employee Numbers with Location or Department", dataframe=df)
 
 
+#####version 3
+
+import spacy
+import pandas as pd
+import re
+from word2number import w2n
+
+nlp = spacy.load("en_core_web_sm")
+
+employee_nouns = {
+    "employee", "employees", "staff", "personnel", "headcount", "workforce",
+    "individuals", "interns", "people", "workers", "crew", "team"
+}
+employee_verbs = {"employ", "employs", "hire", "hires", "retain", "retains", "recruit", "recruits", "staff"}
+
+location_department_keywords = [
+    "hr", "finance", "headquarters", "office", "plant", "site", "facility",
+    "lab", "laboratory", "warehouse", "store", "division", "factory", "center",
+    "department", "manufacturing", "production"
+]
+
+# 正则：识别前缀数字如 "3ofwhich..."
+prefix_number_pattern = re.compile(r'^(\d+)[a-zA-Z]')
+
+def normalize_text(text):
+    # 尝试将英文数字（eight, two）转为数字
+    try:
+        return str(w2n.word_to_num(text))
+    except:
+        return text
+
+def find_employee_numbers_with_fixes(text_list, max_distance=10):
+    results = []
+
+    for text in text_list:
+        doc = nlp(text)
+
+        for i, token in enumerate(doc):
+            # 尝试识别英文数字
+            token_text = normalize_text(token.text.lower())
+
+            if not (token.like_num or token_text.isdigit()):
+                # 额外支持连在一起的前缀数字：如 3ofwhich...
+                if prefix_number_pattern.match(token.text):
+                    token_text = prefix_number_pattern.match(token.text).group(1)
+                else:
+                    continue
+
+            try:
+                number = int(token_text.replace(",", ""))
+            except ValueError:
+                continue
+
+            start = max(0, i - max_distance)
+            end = min(len(doc), i + max_distance + 1)
+            context_tokens = doc[start:end]
+            context_text = context_tokens.text.lower()
+
+            emp_term = None
+            pos_type = None
+
+            # 匹配名词
+            for j in range(start, end):
+                if doc[j].lemma_.lower() in employee_nouns:
+                    emp_term = doc[j].text
+                    pos_type = "noun"
+                    break
+            else:
+                for j in range(start, end):
+                    if doc[j].lemma_.lower() in employee_verbs:
+                        emp_term = doc[j].text
+                        pos_type = "verb"
+                        break
+
+            if emp_term:
+                loc_entities = [ent.text for ent in doc.ents 
+                                if ent.start >= start and ent.end <= end and ent.label_ in {"ORG", "GPE", "FAC"}]
+                matched_kw = None
+                for kw in location_department_keywords:
+                    if kw in context_text:
+                        matched_kw = kw
+                        break
+
+                loc_dep = loc_entities[0] if loc_entities else (matched_kw if matched_kw else "Unspecified")
+
+                results.append({
+                    "Employee Term": emp_term,
+                    "POS Type": pos_type,
+                    "Number": number,
+                    "Location or Department": loc_dep,
+                    "Context": context_tokens.text,
+                    "Sentence": doc.text
+                })
+
+    return pd.DataFrame(results)
+
+# 示例输入包含问题句子
+sentences = [
+    "They currently employ eight (8) full time employees.",
+    "The firm has a total of 11 employees,3ofwhichadfatjadfkdfj"
+]
+
+df = find_employee_numbers_with_fixes(sentences)
+import ace_tools as tools; tools.display_dataframe_to_user(name="Enhanced Employee Number Extraction", dataframe=df)
 
