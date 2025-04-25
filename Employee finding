@@ -189,13 +189,21 @@ employee_nouns = {
     "employee", "employees", "staff", "personnel", "headcount", "workforce",
     "individuals", "interns", "people", "workers", "crew", "team"
 }
-employee_verbs = {"employ", "employs", "hire", "hires", "retain", "retains", "recruit", "recruits", "staff"}
+
+# 添加更多“拥有员工”的动词
+employee_verbs = {
+    "employ", "employs", "hire", "hires", "retain", "retains",
+    "recruit", "recruits", "staff", "has", "have", "includes"
+}
+
 location_department_keywords = [
     "hr", "finance", "headquarters", "office", "plant", "site", "facility",
     "lab", "laboratory", "warehouse", "store", "division", "factory", "center",
-    "department", "manufacturing", "production"
+    "department", "manufacturing", "production", "team"
 ]
+
 prefix_number_pattern = re.compile(r'^(\d+)[a-zA-Z]')
+numeric_word_pattern = re.compile(r'\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\b', re.IGNORECASE)
 
 def normalize_text(text):
     try:
@@ -203,11 +211,16 @@ def normalize_text(text):
     except:
         return text
 
-def find_employee_numbers_by_keyword_core(text_list, max_distance=10):
+def find_employee_numbers_final(text_list, max_distance=10):
     results = []
 
     for text in text_list:
         doc = nlp(text)
+
+        # 使用正则提前修正合并词（如 3ofwhich）分词问题
+        text_fixed = re.sub(r'(\d+)([a-zA-Z])', r'\1 \2', text)
+
+        doc = nlp(text_fixed)
 
         for i, token in enumerate(doc):
             lemma = token.lemma_.lower()
@@ -217,7 +230,7 @@ def find_employee_numbers_by_keyword_core(text_list, max_distance=10):
             emp_term = token.text
             pos_type = "noun" if lemma in employee_nouns else "verb"
 
-            # 向前和向后找数字
+            # 双向搜索数字
             number = None
             context_tokens = None
 
@@ -232,6 +245,14 @@ def find_employee_numbers_by_keyword_core(text_list, max_distance=10):
                     number = int(prefix_number_pattern.match(neighbor.text).group(1))
                     context_tokens = doc[min(i, j):max(i, j)+1]
                     break
+                elif numeric_word_pattern.match(neighbor.text.lower()):
+                    try:
+                        val_num = w2n.word_to_num(neighbor.text.lower())
+                        number = int(val_num)
+                        context_tokens = doc[min(i, j):max(i, j)+1]
+                        break
+                    except:
+                        continue
 
             if number is not None:
                 context_text = context_tokens.text.lower() if context_tokens else ""
@@ -250,13 +271,3 @@ def find_employee_numbers_by_keyword_core(text_list, max_distance=10):
                 })
 
     return pd.DataFrame(results)
-
-# 示例
-sentences = [
-    "the firm has 12 employees,1 production shift, from 8 am to 4 pm",
-    "they currently employ eight (8) full time employees.",
-    "the firm has a total of 11 employees,3ofwhichadfatjadfkdfj"
-]
-
-df = find_employee_numbers_by_keyword_core(sentences)
-import ace_tools as tools; tools.display_dataframe_to_user(name="Fixed Employee Number Extraction", dataframe=df)
