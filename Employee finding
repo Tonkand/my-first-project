@@ -92,65 +92,88 @@ for item in employee_data:
 import spacy
 import pandas as pd
 
-# 加载英文 spaCy 模型
 nlp = spacy.load("en_core_web_sm")
 
-# 员工相关名词和动词
-employee_nouns = {"employee", "employees", "staff", "personnel", "headcount", "workforce", "individuals"}
-employee_verbs = {"employ", "employs", "hire", "hires", "retain", "recruit", "recruits", "staff"}
+# 员工相关词汇
+employee_nouns = {
+    "employee", "employees", "staff", "personnel", "headcount", "workforce",
+    "individuals", "interns", "people", "workers", "crew", "team"
+}
+employee_verbs = {"employ", "employs", "hire", "hires", "retain", "retains", "recruit", "recruits", "staff"}
 
-def find_employee_numbers_detailed(text, max_distance=10):
-    doc = nlp(text)
+# 部门或地点关键词（可扩展）
+location_department_keywords = [
+    "hr", "finance", "headquarters", "office", "plant", "site", "facility",
+    "lab", "laboratory", "warehouse", "store", "division", "factory", "center",
+    "department", "manufacturing", "production"
+]
+
+def find_employee_numbers_with_location(text_list, max_distance=10):
     results = []
 
-    for i, token in enumerate(doc):
-        if not token.like_num:
-            continue
-        try:
-            number = int(token.text.replace(",", ""))
-        except ValueError:
-            continue
+    for text in text_list:
+        doc = nlp(text)
+        for i, token in enumerate(doc):
+            if not token.like_num:
+                continue
+            try:
+                number = int(token.text.replace(",", ""))
+            except ValueError:
+                continue
 
-        # 搜索前后 max_distance 范围的 token
-        start = max(0, i - max_distance)
-        end = min(len(doc), i + max_distance + 1)
-        context_tokens = doc[start:end]
+            start = max(0, i - max_distance)
+            end = min(len(doc), i + max_distance + 1)
+            context_tokens = doc[start:end]
+            context_text = context_tokens.text.lower()
 
-        # 匹配名词
-        for j in range(start, end):
-            if doc[j].lemma_.lower() in employee_nouns:
-                results.append({
-                    "Employee Term": doc[j].text,
-                    "POS Type": "noun",
-                    "Number": number,
-                    "Context": context_tokens.text,
-                    "Sentence": token.sent.text
-                })
-                break
-        else:
-            # 匹配动词
+            emp_term = None
+            pos_type = None
+
+            # 查找员工名词
             for j in range(start, end):
-                if doc[j].lemma_.lower() in employee_verbs:
-                    results.append({
-                        "Employee Term": doc[j].text,
-                        "POS Type": "verb",
-                        "Number": number,
-                        "Context": context_tokens.text,
-                        "Sentence": token.sent.text
-                    })
+                if doc[j].lemma_.lower() in employee_nouns:
+                    emp_term = doc[j].text
+                    pos_type = "noun"
                     break
+            else:
+                # 查找员工动词
+                for j in range(start, end):
+                    if doc[j].lemma_.lower() in employee_verbs:
+                        emp_term = doc[j].text
+                        pos_type = "verb"
+                        break
+
+            if emp_term:
+                # 提取部门或地点信息
+                matched_loc = None
+                for kw in location_department_keywords:
+                    if kw in context_text:
+                        matched_loc = kw
+                        break
+
+                results.append({
+                    "Employee Term": emp_term,
+                    "POS Type": pos_type,
+                    "Number": number,
+                    "Location or Department": matched_loc or "Unspecified",
+                    "Context": context_tokens.text,
+                    "Sentence": doc.text
+                })
 
     return pd.DataFrame(results)
 
-# 示例文本
-text = """
-We currently employ 120 full-time staff and 30 part-time employees.
-The firm employs 1,713 individuals at the manufacturing site.
-In 2020, the number of employees was around 98. HR hired 5 new interns.
-Only 2 people are currently retained as core technical staff.
-"""
+# 示例输入
+sentences = [
+    "We employ 23 full-time staff.",
+    "2 people are currently retained in the HR department.",
+    "The firm employs 1,713 individuals at the manufacturing site.",
+    "They hired 5 workers in the lab.",
+    "The company recruited 8 personnel for the finance division.",
+    "Only 3 people are based in headquarters."
+]
 
-df = find_employee_numbers_detailed(text)
-import ace_tools as tools; tools.display_dataframe_to_user(name="Employee Number Matches (with POS)", dataframe=df)
+df = find_employee_numbers_with_location(sentences)
+import ace_tools as tools; tools.display_dataframe_to_user(name="Employee Numbers with Location or Department", dataframe=df)
+
 
 
