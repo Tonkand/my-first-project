@@ -1,7 +1,7 @@
 import pandas as pd
 import re
 import requests
-from difflib import SequenceMatcher
+from fuzzywuzzy import fuzz, process  # 加入 fuzzywuzzy
 
 # 下載 RxNorm 顯示名稱列表（含複方藥）
 def fetch_rxnorm_display_names():
@@ -20,23 +20,37 @@ def clean_drug_name(name):
     name = re.sub(r'\s{2,}', ' ', name)  # 多餘空格
     return name.strip()
 
-# fuzzy matching，找最接近的 RxNorm 名稱
-def get_best_match(name, rxnames, threshold=0.7):
-    def similarity(a, b):
-        return SequenceMatcher(None, a.lower(), b.lower()).ratio()
-    scores = [(rx, similarity(name, rx)) for rx in rxnames]
-    scores = sorted(scores, key=lambda x: x[1], reverse=True)
-    return scores[0][0] if scores and scores[0][1] >= threshold else ""
 
-# 主流程
+####
+def normalize_for_matching(text):
+    # 把所有非字母數字轉成空格，再合併多餘空格
+    text = re.sub(r'[^a-zA-Z0-9]', ' ', text)
+    return re.sub(r'\s+', ' ', text).strip().lower()
+
+# 使用 fuzzywuzzy 取最佳匹配與匹配分數
+def get_best_fuzzy_match(name, vocab_list, threshold=60):
+    name_clean = normalize_for_matching(name)
+    cleaned_vocab = [(term, normalize_for_matching(term)) for term in vocab_list]
+
+    # 比對 fuzzy 分數
+    scored = [(original, fuzz.ratio(name_clean, cleaned_term)) for original, cleaned_term in cleaned_vocab]
+    best_match, best_score = max(scored, key=lambda x: x[1])
+
+    return (best_match, best_score) if best_score >= threshold else ("", 0)
+
+# 主流程：加入匹配分數欄位
 def correct_drug_names(drug_list):
     rxnorm_names = fetch_rxnorm_display_names()
     df = pd.DataFrame({'original': drug_list})
     df['cleaned'] = df['original'].apply(clean_drug_name)
-    df['suggested_correction'] = df['cleaned'].apply(lambda x: get_best_match(x, rxnorm_names))
+
+    results = df['cleaned'].apply(lambda x: get_best_fuzzy_match(x, rxnorm_names))
+    df['suggested_correction'] = results.apply(lambda x: x[0])
+    df['match_score'] = results.apply(lambda x: f"{x[1]}%")
+    
     return df[df['suggested_correction'] != ""]
 
-# 測試資料（你可以換成自己的 txt/csv 讀入）
+# 測試資料
 drug_list = [
     "DL-Methionine (Not for Infant Foods)(protein)",
     "2(3H)-furanone dihydro (sedative)",
@@ -44,12 +58,15 @@ drug_list = [
     "amoxicillin clavulante (oral)(tablet)",
     "Vitamin C (Immune Support)",
     "antibiotic N.E.C (not pediatric)",
-    "Aspirin UPS",
+    "anagrelide hydrocholoride",
     "Paracetamol USP (pain relief)",
-    "ibuprfen",
+    "anagrelide",
     "omeprazol",
     "acetaminophen codeine (Tablet)",
 ]
 
 # 執行
 df_result = correct_drug_names(drug_list)
+df_result
+
+
