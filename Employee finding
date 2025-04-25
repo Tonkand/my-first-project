@@ -185,89 +185,63 @@ from word2number import w2n
 
 nlp = spacy.load("en_core_web_sm")
 
-employee_nouns = {
+employee_terms = {
     "employee", "employees", "staff", "personnel", "headcount", "workforce",
-    "individuals", "interns", "people", "workers", "crew", "team"
-}
-
-# 添加更多“拥有员工”的动词
-employee_verbs = {
-    "employ", "employs", "hire", "hires", "retain", "retains",
-    "recruit", "recruits", "staff", "has", "have", "includes"
+    "individuals", "interns", "people", "workers", "crew", "team", "employed", "employ", "hire", "hired"
 }
 
 location_department_keywords = [
     "hr", "finance", "headquarters", "office", "plant", "site", "facility",
     "lab", "laboratory", "warehouse", "store", "division", "factory", "center",
-    "department", "manufacturing", "production", "team"
+    "department", "manufacturing", "production", "nationwide", "worldwide", "in", "us", "america"
 ]
 
-prefix_number_pattern = re.compile(r'^(\d+)[a-zA-Z]')
 numeric_word_pattern = re.compile(r'\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\b', re.IGNORECASE)
 
-def normalize_text(text):
+def normalize_number(text):
     try:
-        return str(w2n.word_to_num(text))
+        return int(text.replace(",", ""))
     except:
-        return text
+        try:
+            return w2n.word_to_num(text.lower())
+        except:
+            return None
 
-def find_employee_numbers_final(text_list, max_distance=10):
+def extract_employee_numbers(text_list, max_distance=12):
     results = []
 
     for text in text_list:
         doc = nlp(text)
 
-        # 使用正则提前修正合并词（如 3ofwhich）分词问题
-        text_fixed = re.sub(r'(\d+)([a-zA-Z])', r'\1 \2', text)
-
-        doc = nlp(text_fixed)
+        number_tokens = []
+        term_tokens = []
 
         for i, token in enumerate(doc):
-            lemma = token.lemma_.lower()
-            if lemma not in employee_nouns and lemma not in employee_verbs:
-                continue
+            norm_num = normalize_number(token.text)
+            if norm_num is not None:
+                number_tokens.append((i, norm_num))
 
-            emp_term = token.text
-            pos_type = "noun" if lemma in employee_nouns else "verb"
+            if token.lemma_.lower() in employee_terms:
+                term_tokens.append((i, token.text, token.pos_))
 
-            # 双向搜索数字
-            number = None
-            context_tokens = None
+        for num_i, number in number_tokens:
+            for term_i, term_text, pos in term_tokens:
+                if abs(term_i - num_i) <= max_distance:
+                    context = doc[min(num_i, term_i): max(num_i, term_i)+1]
+                    loc_entities = [ent.text for ent in doc.ents 
+                                    if ent.start >= context.start and ent.end <= context.end and ent.label_ in {"ORG", "GPE", "FAC"}]
+                    context_text = context.text.lower()
+                    matched_kw = next((kw for kw in location_department_keywords if kw in context_text), None)
+                    loc_dep = loc_entities[0] if loc_entities else (matched_kw if matched_kw else "Unspecified")
 
-            for j in range(max(0, i - max_distance), min(len(doc), i + max_distance + 1)):
-                neighbor = doc[j]
-                val = normalize_text(neighbor.text.lower())
-                if val.isdigit():
-                    number = int(val)
-                    context_tokens = doc[min(i, j):max(i, j)+1]
-                    break
-                elif prefix_number_pattern.match(neighbor.text):
-                    number = int(prefix_number_pattern.match(neighbor.text).group(1))
-                    context_tokens = doc[min(i, j):max(i, j)+1]
-                    break
-                elif numeric_word_pattern.match(neighbor.text.lower()):
-                    try:
-                        val_num = w2n.word_to_num(neighbor.text.lower())
-                        number = int(val_num)
-                        context_tokens = doc[min(i, j):max(i, j)+1]
-                        break
-                    except:
-                        continue
-
-            if number is not None:
-                context_text = context_tokens.text.lower() if context_tokens else ""
-                loc_entities = [ent.text for ent in doc.ents 
-                                if ent.start >= context_tokens.start and ent.end <= context_tokens.end and ent.label_ in {"ORG", "GPE", "FAC"}] if context_tokens else []
-                matched_kw = next((kw for kw in location_department_keywords if kw in context_text), None)
-                loc_dep = loc_entities[0] if loc_entities else (matched_kw if matched_kw else "Unspecified")
-
-                results.append({
-                    "Employee Term": emp_term,
-                    "POS Type": pos_type,
-                    "Number": number,
-                    "Location or Department": loc_dep,
-                    "Context": context_tokens.text if context_tokens else "",
-                    "Sentence": doc.text
-                })
+                    results.append({
+                        "Employee Term": term_text,
+                        "POS Type": pos.lower(),
+                        "Number": number,
+                        "Location or Department": loc_dep,
+                        "Context": context.text,
+                        "Sentence": doc.text
+                    })
+                    break  # one match is enough for that number
 
     return pd.DataFrame(results)
