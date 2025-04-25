@@ -180,68 +180,94 @@ import ace_tools as tools; tools.display_dataframe_to_user(name="Employee Number
 
 import spacy
 import pandas as pd
-import re
-from word2number import w2n
 
 nlp = spacy.load("en_core_web_sm")
 
-employee_terms = {
+# 员工相关词汇
+employee_nouns = {
     "employee", "employees", "staff", "personnel", "headcount", "workforce",
-    "individuals", "interns", "people", "workers", "crew", "team", "employed", "employ", "hire", "hired"
+    "individuals", "interns", "people", "workers", "crew", "team"
 }
+employee_verbs = {"employ", "employs", "hire", "hires", "retain", "retains", "recruit", "recruits", "staff"}
 
+# 人工定义的关键词（用于补充）
 location_department_keywords = [
     "hr", "finance", "headquarters", "office", "plant", "site", "facility",
     "lab", "laboratory", "warehouse", "store", "division", "factory", "center",
-    "department", "manufacturing", "production", "nationwide", "worldwide", "in", "us", "america"
+    "department", "manufacturing", "production"
 ]
 
-numeric_word_pattern = re.compile(r'\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\b', re.IGNORECASE)
-
-def normalize_number(text):
-    try:
-        return int(text.replace(",", ""))
-    except:
-        try:
-            return w2n.word_to_num(text.lower())
-        except:
-            return None
-
-def extract_employee_numbers(text_list, max_distance=12):
+def find_employee_numbers_with_location_ner(text_list, max_distance=10):
     results = []
 
     for text in text_list:
         doc = nlp(text)
-
-        number_tokens = []
-        term_tokens = []
-
         for i, token in enumerate(doc):
-            norm_num = normalize_number(token.text)
-            if norm_num is not None:
-                number_tokens.append((i, norm_num))
+            if not token.like_num:
+                continue
+            try:
+                number = int(token.text.replace(",", ""))
+            except ValueError:
+                continue
 
-            if token.lemma_.lower() in employee_terms:
-                term_tokens.append((i, token.text, token.pos_))
+            start = max(0, i - max_distance)
+            end = min(len(doc), i + max_distance + 1)
+            context_tokens = doc[start:end]
+            context_text = context_tokens.text.lower()
 
-        for num_i, number in number_tokens:
-            for term_i, term_text, pos in term_tokens:
-                if abs(term_i - num_i) <= max_distance:
-                    context = doc[min(num_i, term_i): max(num_i, term_i)+1]
-                    loc_entities = [ent.text for ent in doc.ents 
-                                    if ent.start >= context.start and ent.end <= context.end and ent.label_ in {"ORG", "GPE", "FAC"}]
-                    context_text = context.text.lower()
-                    matched_kw = next((kw for kw in location_department_keywords if kw in context_text), None)
-                    loc_dep = loc_entities[0] if loc_entities else (matched_kw if matched_kw else "Unspecified")
+            emp_term = None
+            pos_type = None
 
-                    results.append({
-                        "Employee Term": term_text,
-                        "POS Type": pos.lower(),
-                        "Number": number,
-                        "Location or Department": loc_dep,
-                        "Context": context.text,
-                        "Sentence": doc.text
-                    })
-                    break  # one match is enough for that number
+            # 查找员工名词
+            for j in range(start, end):
+                if doc[j].lemma_.lower() in employee_nouns:
+                    emp_term = doc[j].text
+                    pos_type = "noun"
+                    break
+            else:
+                # 查找员工动词
+                for j in range(start, end):
+                    if doc[j].lemma_.lower() in employee_verbs:
+                        emp_term = doc[j].text
+                        pos_type = "verb"
+                        break
+
+            if emp_term:
+                # 先尝试从实体中提取 location/department
+                loc_entities = [ent.text for ent in doc.ents 
+                                if ent.start >= start and ent.end <= end and ent.label_ in {"ORG", "GPE", "FAC"}]
+
+                # 若实体找不到，则尝试用人工关键词匹配
+                matched_kw = None
+                for kw in location_department_keywords:
+                    if kw in context_text:
+                        matched_kw = kw
+                        break
+
+                loc_dep = loc_entities[0] if loc_entities else (matched_kw if matched_kw else "Unspecified")
+
+                results.append({
+                    "Employee Term": emp_term,
+                    "POS Type": pos_type,
+                    "Number": number,
+                    "Location or Department": loc_dep,
+                    "Context": context_tokens.text,
+                    "Sentence": doc.text
+                })
 
     return pd.DataFrame(results)
+
+# 示例输入
+sentences = [
+    "We employ 23 full-time staff.",
+    "2 people are currently retained in the HR department.",
+    "The firm employs 1,713 individuals at the manufacturing site.",
+    "They hired 5 workers in the lab.",
+    "The company recruited 8 personnel for the finance division.",
+    "Only 3 people are based in headquarters.",
+    "Pfizer retained 2 engineers in Shanghai lab.",
+    "The New York office currently has 44 staff."
+]
+
+df = find_employee_numbers_with_location_ner(sentences)
+import ace_tools as tools; tools.display_dataframe_to_user(name="Employee Numbers with Location/Department NER", dataframe=df)
