@@ -1,0 +1,6 @@
+Part | Meaning
+Industry | Industry type (e.g., drugs, food, medical devices)
+Class | Broad product category (e.g., oral drugs, external use drugs)
+Subclass | More specific product category (e.g., tablets, capsules)
+Product | Specific product type (e.g., pain relievers, antibiotics)
+Process Indicator | Processing status (e.g., processed, unprocessed)
