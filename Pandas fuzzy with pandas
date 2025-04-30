@@ -24,35 +24,45 @@ df_a[['best_match', 'match_info', 'match_score']] = df_a['input_name'].apply(
 
 print(df_a)
 
-########from thefuzz import process
+########
 import pandas as pd
 import re
+from thefuzz import process
 
-# 示例数据
-df = pd.DataFrame({
-    'cleaned_name': ['methyl moxazolidinyl', 'amoxillin clavunlate']
-})
-
-# 词典（你提供的）
+# 词典
 valid_words_list = ['methyl', 'moxazolidinyl', 'amoxicillin', 'clavulanate']
 
-# 分词 + 检查 + fuzzy match
-def check_and_correct(text, dictionary):
+# 检查函数
+def check_and_correct_with_threshold(text, dictionary, threshold=85):
     words = re.findall(r'\b[a-zA-Z]{2,}\b', text)
-    unmatched, matched, scores = [], [], []
-    
+    unmatched = []
+    matched = []
+    scores = []
+    unmatched_failed = []
+
     for word in words:
         if word.lower() not in dictionary:
-            best_match, score = process.extractOne(word, dictionary)
-            unmatched.append(word)
-            matched.append(best_match)
-            scores.append(score)
-    
-    return pd.Series([unmatched, matched, scores])
+            match, score = process.extractOne(word, dictionary)
+            score = int(score)
+            if score >= threshold:
+                unmatched.append(word)
+                matched.append(match)
+                scores.append(score)
+            else:
+                unmatched.append(word)
+                matched.append(None)
+                scores.append(None)
+                unmatched_failed.append(word)  # ✅ 单独记录低匹配词
+    return pd.Series([unmatched, matched, scores, unmatched_failed])
 
-# 应用到 DataFrame
-df[['unmatched_words', 'matched_words', 'match_scores']] = df['cleaned_name'].apply(
-    lambda x: check_and_correct(x, valid_words_list)
+# 示例 DataFrame
+df = pd.DataFrame({
+    'cleaned_name': ['methyl moxazolidinyl', 'amoxillin clavunlate', 'aspriin']
+})
+
+# 应用函数，新增一列 unmatched_failed_words
+df[['unmatched_words', 'matched_words', 'match_scores', 'unmatched_failed_words']] = df['cleaned_name'].apply(
+    lambda x: check_and_correct_with_threshold(x, valid_words_list, threshold=85)
 )
 
 print(df)
