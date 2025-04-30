@@ -1,0 +1,26 @@
+import pandas as pd
+from rapidfuzz import process, fuzz
+
+# 需要匹配的 DataFrame A
+df_a = pd.DataFrame({
+    'input_name': ['aspirin', 'ibuprofane', 'paracitamol', 'amoxilin']
+})
+
+# 匹配来源的 DataFrame B
+df_b = pd.DataFrame({
+    'match_column': ['aspirin', 'ibuprofen', 'paracetamol', 'amoxicillin', 'acetaminophen'],
+    'info_column': ['used for pain', 'NSAID', 'fever reducer', 'antibiotic', 'pain relief']
+})
+# 定义 fuzzy match 函数，返回 match_column 和 info_column
+def fuzzy_match_with_info(text, df_lookup):
+    match, score, idx = process.extractOne(text, df_lookup['match_column'], scorer=fuzz.ratio)
+    matched_info = df_lookup.iloc[idx]['info_column']
+    return pd.Series([match, matched_info, score])
+
+# 应用函数
+df_a[['best_match', 'match_info', 'match_score']] = df_a['input_name'].apply(
+    lambda x: fuzzy_match_with_info(x, df_b)
+)
+
+print(df_a)
+
