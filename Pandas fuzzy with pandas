@@ -24,3 +24,35 @@ df_a[['best_match', 'match_info', 'match_score']] = df_a['input_name'].apply(
 
 print(df_a)
 
+########from thefuzz import process
+import pandas as pd
+import re
+
+# 示例数据
+df = pd.DataFrame({
+    'cleaned_name': ['methyl moxazolidinyl', 'amoxillin clavunlate']
+})
+
+# 词典（你提供的）
+valid_words_list = ['methyl', 'moxazolidinyl', 'amoxicillin', 'clavulanate']
+
+# 分词 + 检查 + fuzzy match
+def check_and_correct(text, dictionary):
+    words = re.findall(r'\b[a-zA-Z]{2,}\b', text)
+    unmatched, matched, scores = [], [], []
+    
+    for word in words:
+        if word.lower() not in dictionary:
+            best_match, score = process.extractOne(word, dictionary)
+            unmatched.append(word)
+            matched.append(best_match)
+            scores.append(score)
+    
+    return pd.Series([unmatched, matched, scores])
+
+# 应用到 DataFrame
+df[['unmatched_words', 'matched_words', 'match_scores']] = df['cleaned_name'].apply(
+    lambda x: check_and_correct(x, valid_words_list)
+)
+
+print(df)
