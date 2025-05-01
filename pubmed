@@ -1,4 +1,75 @@
+import pandas as pd
+import requests
+import xml.etree.ElementTree as ET
+import re
+import time
+from tqdm import tqdm
 
+def query_pubmed(term, api_key=None):
+    quoted_term = f'"{term}"'
+    url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+
+    # 查準確文章數
+    count_params = {
+        "db": "pubmed",
+        "term": quoted_term,
+        "retmode": "json"
+    }
+    if api_key:
+        count_params["api_key"] = api_key
+
+    try:
+        r1 = requests.get(url, params=count_params, timeout=10)
+        r1.raise_for_status()
+        count = int(r1.json()["esearchresult"]["count"])
+    except Exception as e:
+        print(f"Error getting count for '{term}': {e}")
+        count = None
+
+    time.sleep(0.1)  # 加上 sleep，避免請求太快
+
+    # 查 query translation
+    qt_params = {
+        "db": "pubmed",
+        "term": term,
+        "retmode": "xml"
+    }
+    if api_key:
+        qt_params["api_key"] = api_key
+
+    try:
+        r2 = requests.get(url, params=qt_params, timeout=10)
+        r2.raise_for_status()
+        root = ET.fromstring(r2.text)
+        qt = root.findtext(".//QueryTranslation") or ""
+        match = re.search(r'"([^"]+)"', qt)
+        corrected_term = match.group(1) if match else None
+
+        if corrected_term and corrected_term.lower() == term.lower():
+            corrected_term = None
+    except Exception as e:
+        print(f"Error getting corrected term for '{term}': {e}")
+        corrected_term = None
+
+    time.sleep(0.1)  # 再 sleep，因為是第二個請求
+
+    return count, corrected_term
+
+# 主函數：處理整個 DataFrame，保留所有行，僅標記 corrected_term
+def enrich_pubmed_df_keep_all(df, column_name='word', api_key=None):
+    tqdm.pandas()
+    df[['pubmed_count', 'corrected_term']] = df[column_name].progress_apply(
+        lambda term: pd.Series(query_pubmed(term, api_key))
+    )
+    return df
+
+
+df = pd.DataFrame({'word': ['aspirn', 'acetaminophen', 'ibuprofenn', 'cancer', 'diabtes']})
+df_full = enrich_pubmed_df_keep_all(df, column_name='word', api_key="your_api_key_here")
+print(df_full)
+
+
+################
 import pandas as pd
 import requests
 from tqdm import tqdm
