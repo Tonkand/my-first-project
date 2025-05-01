@@ -129,26 +129,26 @@ import requests
 import re
 from tqdm import tqdm
 
-# 設定下載目錄
-DOWNLOAD_DIR = "pubmed_medline"
+# 设置下载目录
+DOWNLOAD_DIR = "pubmed_baseline"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# PubMed FTP URL（HTTP 映射）
-BASE_URL = "https://ftp.ncbi.nlm.nih.gov/pubmed/medline/"
+# PubMed FTP 的 HTTP 映射地址
+BASE_URL = "https://ftp.ncbi.nlm.nih.gov/pubmed/baseline/"
 
-# 使用正則表達式抓取所有 medline*.xml.gz 檔案
+# 获取所有 .xml.gz 文件列表
 def get_pubmed_file_list():
-    resp = requests.get(BASE_URL)
-    filenames = re.findall(r'medline\d+n\d+\.xml\.gz', resp.text)
+    response = requests.get(BASE_URL)
+    filenames = re.findall(r'pubmed\d+n\d+\.xml\.gz', response.text)
     return sorted(set(filenames))
 
-# 下載檔案
+# 下载单个文件
 def download_file(filename):
     url = BASE_URL + filename
     local_path = os.path.join(DOWNLOAD_DIR, filename)
 
     if os.path.exists(local_path):
-        return  # 已存在就略過
+        return  # 文件已存在，跳过下载
 
     with requests.get(url, stream=True) as r:
         r.raise_for_status()
@@ -164,14 +164,12 @@ def download_file(filename):
                 f.write(chunk)
                 bar.update(len(chunk))
 
-# 開始下載流程
+# 主程序
 files_to_download = get_pubmed_file_list()
-print(f"✅ Found {len(files_to_download)} PubMed files to download.")
+print(f"找到 {len(files_to_download)} 个 PubMed 文件。")
 
 for filename in files_to_download:
     download_file(filename)
 
-print("✅ All PubMed XML files downloaded successfully.")
+print("✅ 所有 PubMed XML 文件下载完成。")
 
-
-print("✅ All PubMed XML files downloaded.")
