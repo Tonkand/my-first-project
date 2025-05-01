@@ -173,3 +173,58 @@ for filename in files_to_download:
 
 print("✅ 所有 PubMed XML 文件下载完成。")
 
+
+#########
+import os
+import gzip
+import xml.etree.ElementTree as ET
+from tqdm import tqdm
+import pandas as pd
+
+# ======= 請修改你的資料夾路徑（包含所有 .xml.gz） =======
+PUBMED_FOLDER = "path/to/medline/files"  # ← 改成你儲存 PubMed XML 的資料夾
+
+# 你要查詢的單詞（小寫）
+target_words = ['acetaminophen', 'aspirin', 'ibuprofen', 'cancer']
+
+# 統計字典：{word: 出現在幾篇文章中}
+article_counts = {word: 0 for word in target_words}
+
+# 所有 .gz 檔案路徑
+files = [os.path.join(PUBMED_FOLDER, f) for f in os.listdir(PUBMED_FOLDER) if f.endswith('.xml.gz')]
+print(f"Found {len(files)} PubMed files.")
+
+# 主處理函數
+def process_pubmed_file(file_path, article_counts):
+    try:
+        with gzip.open(file_path, 'rb') as f:
+            tree = ET.parse(f)
+            root = tree.getroot()
+            for article in root.findall('.//PubmedArticle'):
+                title = article.findtext('.//ArticleTitle') or ""
+                abstract = article.findtext('.//AbstractText') or ""
+                combined = (title + " " + abstract).lower()
+
+                for word in target_words:
+                    if word in combined:
+                        article_counts[word] += 1
+                        # 這篇文章中出現一個詞後就不重複計算該詞
+                        # 可改成集合記錄避免重複統計
+    except Exception as e:
+        print(f"Failed to process {file_path}: {e}")
+
+# 處理所有檔案
+for file in tqdm(files, desc="Processing PubMed files"):
+    process_pubmed_file(file, article_counts)
+
+# 輸出結果為 DataFrame
+df_result = pd.DataFrame([
+    {"word": word, "article_count": count}
+    for word, count in article_counts.items()
+])
+
+print(df_result)
+
+# 可選：存為 CSV
+df_result.to_csv("pubmed_word_article_counts.csv", index=False)
+
