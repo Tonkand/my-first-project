@@ -15,6 +15,7 @@ def get_pubmed_hits(term):
         "db": "pubmed",
         "term": term,
         "retmode": "json"
+        "api_key": 'd7cc84954f580ff4a2ea62f46fce94875008'
     }
     try:
         r = requests.get(url, params=params)
