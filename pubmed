@@ -1,16 +1,67 @@
-import requests
 
-def check_term_in_pubmed(term):
+import pandas as pd
+import requests
+from tqdm import tqdm
+
+# 假設你的 dataframe 長這樣
+df = pd.DataFrame({
+    'drug_name': ['acetaminophen', 'ibuprofen', 'aspirin', 'hydroxyzine', 'notarealdrug']
+})
+
+# 查詢函數
+def get_pubmed_hits(term):
     url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
     params = {
         "db": "pubmed",
         "term": term,
         "retmode": "json"
     }
-    r = requests.get(url, params=params)
-    data = r.json()
-    count = int(data["esearchresult"]["count"])
-    return count > 0, count
+    try:
+        r = requests.get(url, params=params)
+        r.raise_for_status()
+        data = r.json()
+        return int(data["esearchresult"]["count"])
+    except Exception as e:
+        print(f"Error with term '{term}': {e}")
+        return None
 
-found, hits = check_term_in_pubmed("acetaminophen")
-print(f"Found: {found}, Hits: {hits}")
+# 用 tqdm 顯示進度條
+tqdm.pandas()
+
+# 新增一欄：PubMed 點擊數（匹配數量）
+df['pubmed_hits'] = df['drug_name'].progress_apply(get_pubmed_hits)
+
+# 顯示結果
+print(df)
+
+
+#######
+
+import pandas as pd
+import requests
+from tqdm import tqdm
+
+# 假設的 DataFrame
+df = pd.DataFrame({
+    'drug_name': ['acetaminophen', 'ibuprofen', 'aspirin', 'hydroxyzine', 'notarealdrug']
+})
+
+# 查詢 PubChem 的函數
+def get_pubchem_cid(term):
+    url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{term}/cids/JSON"
+    try:
+        r = requests.get(url, timeout=5)
+        r.raise_for_status()
+        data = r.json()
+        return data['IdentifierList']['CID'][0]  # 只取第一個 CID
+    except Exception:
+        return None  # 沒找到或出錯時返回 None
+
+# 加上進度條
+tqdm.pandas()
+
+# 新增一欄，顯示是否存在於 PubChem（CID）
+df['pubchem_cid'] = df['drug_name'].progress_apply(get_pubchem_cid)
+
+# 顯示結果
+print(df)
