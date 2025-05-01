@@ -1,0 +1,16 @@
+import requests
+
+def check_term_in_pubmed(term):
+    url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+    params = {
+        "db": "pubmed",
+        "term": term,
+        "retmode": "json"
+    }
+    r = requests.get(url, params=params)
+    data = r.json()
+    count = int(data["esearchresult"]["count"])
+    return count > 0, count
+
+found, hits = check_term_in_pubmed("acetaminophen")
+print(f"Found: {found}, Hits: {hits}")
