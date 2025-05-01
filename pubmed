@@ -121,3 +121,55 @@ df['pubchem_cid'] = df['drug_name'].progress_apply(get_pubchem_cid)
 
 # 顯示結果
 print(df)
+
+
+
+import os
+import requests
+from bs4 import BeautifulSoup
+from tqdm import tqdm
+
+# 下載目標資料夾
+DOWNLOAD_DIR = "pubmed_medline"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# NCBI PubMed FTP 網址（http 映射）
+BASE_URL = "https://ftp.ncbi.nlm.nih.gov/pubmed/medline/"
+
+# 抓取所有 .xml.gz 檔案連結
+def get_pubmed_file_list():
+    resp = requests.get(BASE_URL)
+    soup = BeautifulSoup(resp.text, "html.parser")
+    files = [a['href'] for a in soup.find_all('a') if a['href'].endswith(".xml.gz")]
+    return files
+
+# 下載單一檔案（支援斷點續傳）
+def download_file(filename):
+    url = BASE_URL + filename
+    local_path = os.path.join(DOWNLOAD_DIR, filename)
+
+    if os.path.exists(local_path):
+        return  # 已經下載過
+
+    with requests.get(url, stream=True) as r:
+        r.raise_for_status()
+        total_size = int(r.headers.get("content-length", 0))
+        with open(local_path, "wb") as f, tqdm(
+            desc=filename,
+            total=total_size,
+            unit="B",
+            unit_scale=True,
+            unit_divisor=1024,
+        ) as bar:
+            for chunk in r.iter_content(chunk_size=8192):
+                f.write(chunk)
+                bar.update(len(chunk))
+
+# 主程式
+files_to_download = get_pubmed_file_list()
+print(f"Found {len(files_to_download)} PubMed files.")
+
+for filename in files_to_download:
+    download_file(filename)
+
+print("✅ All PubMed XML files downloaded.")
