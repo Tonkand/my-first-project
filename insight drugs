@@ -1,0 +1,36 @@
+import pandas as pd
+import requests
+
+# 第一步：抓取 Inxight 藥品清單
+def fetch_inxight_drug_names(limit=1000):
+    url = "https://drugs.ncats.io/api/drug"
+    all_names = set()
+    offset = 0
+
+    while True:
+        params = {'size': limit, 'from': offset}
+        r = requests.get(url, params=params)
+        if r.status_code != 200:
+            break
+        data = r.json()
+        hits = data.get("hits", [])
+        if not hits:
+            break
+        for item in hits:
+            name = item.get("name")
+            if name:
+                all_names.add(name.lower())  # 用小寫方便比對
+        offset += limit
+    return all_names
+
+# 第二步：載入你的藥品清單（範例）
+df_my_drugs = pd.DataFrame({
+    'drug_name': ['Aspirin', 'Xylazine', 'Stenbolone', 'Abc123']
+})
+
+# 第三步：比對是否在 Inxight 中
+inxight_names = fetch_inxight_drug_names()
+df_my_drugs['in_inxight'] = df_my_drugs['drug_name'].str.lower().isin(inxight_names)
+
+# 顯示結果
+print(df_my_drugs)
