@@ -169,3 +169,44 @@ if __name__ == "__main__":
     print("\nSemantic similarity matrix:")
     sim_matrix = drug_similarity_matrix(drug_queries)
     print(sim_matrix.round(3))
+
+########
+#########Python：抓取所有 RxNorm 藥品的基本代碼
+import requests
+import time
+import pandas as pd
+
+def get_all_rxnorm_drugs():
+    base_url = "https://rxnav.nlm.nih.gov/REST"
+    rxnorm_url = f"{base_url}/approximateTerm"
+    all_drugs = []
+    seen_cui = set()
+
+    # Example: loop through A-Z to get terms by keyword
+    for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        print(f"Searching for drugs starting with '{letter}'...")
+        params = {
+            "term": letter,
+            "maxEntries": 1000  # default 20
+        }
+        response = requests.get(rxnorm_url, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            candidates = data.get("approximateGroup", {}).get("candidate", [])
+            for item in candidates:
+                rx_cui = item["rxcui"]
+                name = item["term"]
+                if rx_cui not in seen_cui:
+                    all_drugs.append({"RxCUI": rx_cui, "DrugName": name})
+                    seen_cui.add(rx_cui)
+        else:
+            print(f"Failed on {letter}: {response.status_code}")
+        time.sleep(0.3)  # Avoid overloading API
+
+    return pd.DataFrame(all_drugs)
+
+# 使用範例
+df_rxnorm = get_all_rxnorm_drugs()
+df_rxnorm.to_csv("rxnorm_drugs.csv", index=False)
+print("Done. Saved to rxnorm_drugs.csv")
+
