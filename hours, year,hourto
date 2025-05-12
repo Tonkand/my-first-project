@@ -4,55 +4,34 @@ import pandas as pd
 def tag_sentences(sentences):
     data = []
 
-    # 時間範圍：允許多種分隔符，大小寫無關
-    separator = r'(to|until|–|-|_|~|:|：|t)'  # 常見+錯字分隔符
+    # 時間範圍分隔符
+    separator = r'(to|until|–|-|_|~|:|：|t)'
 
-    hoursto_pattern = (
-        rf'\b\d{{1,2}}(:\d{{2}})?\s*(am|pm)?\s*{separator}\s*\d{{1,2}}(:\d{{2}})?\s*(am|pm)?\b'
-    )
-
+    # 定義正則表達式
+    hoursto_pattern = rf'\b\d{{1,2}}(:\d{{2}})?\s*(am|pm)?\s*{separator}\s*\d{{1,2}}(:\d{{2}})?\s*(am|pm)?\b'
     hours_pattern = r'\b\d{1,2}(:\d{2})?\s*(am|pm)\b'
     year_pattern = r'\b(19|20)\d{2}\b'
 
     for sentence in sentences:
-        tag = None
-        match = None
+        match_found = False
 
-        # Check hour-to-hour (hoursto)
-        m = re.search(hoursto_pattern, sentence, flags=re.IGNORECASE)
-        if m:
-            tag = 'hoursto'
-            match = m.group(0)
-        else:
-            # Check single hour
-            m = re.search(hours_pattern, sentence, flags=re.IGNORECASE)
-            if m:
-                tag = 'hours'
-                match = m.group(0)
-            else:
-                # Check year
-                m = re.search(year_pattern, sentence)
-                if m:
-                    tag = 'year'
-                    match = m.group(0)
+        # hoursto: 每個 match 為一行
+        for m in re.finditer(hoursto_pattern, sentence, flags=re.IGNORECASE):
+            data.append([sentence, 'hoursto', m.group(0)])
+            match_found = True
 
-        data.append([sentence, tag, match])
+        # hours
+        for m in re.finditer(hours_pattern, sentence, flags=re.IGNORECASE):
+            data.append([sentence, 'hours', m.group(0)])
+            match_found = True
+
+        # year
+        for m in re.finditer(year_pattern, sentence):
+            data.append([sentence, 'year', m.group(0)])
+            match_found = True
+
+        # 如果沒有 match，還是保留一行
+        if not match_found:
+            data.append([sentence, None, None])
 
     return pd.DataFrame(data, columns=["sentence", "tag", "match"])
-
-# 測試句子
-sentences = [
-    "meeting: 3PM t 4PM",
-    "run from 10：30 t 11:30",
-    "slot 8pm _ 10PM",
-    "window 9:00 ~ 10:30",
-    "classic 11 am – 1 pm",
-    "He was born in 2008.",
-    "just 6am",
-    "Free time: 12 - 1",
-    "Lunch: 1pm until 2:30pm",
-    "Sleep: 10 - 6am"
-]
-
-df = tag_sentences(sentences)
-print(df)
