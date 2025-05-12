@@ -3,43 +3,56 @@ import pandas as pd
 
 def tag_sentences(sentences):
     data = []
+
+    # 時間範圍：允許多種分隔符，大小寫無關
+    separator = r'(to|until|–|-|_|~|:|：|t)'  # 常見+錯字分隔符
+
+    hoursto_pattern = (
+        rf'\b\d{{1,2}}(:\d{{2}})?\s*(am|pm)?\s*{separator}\s*\d{{1,2}}(:\d{{2}})?\s*(am|pm)?\b'
+    )
+
+    hours_pattern = r'\b\d{1,2}(:\d{2})?\s*(am|pm)\b'
+    year_pattern = r'\b(19|20)\d{2}\b'
+
     for sentence in sentences:
-        # 預設標記為 None
         tag = None
         match = None
 
-        # 檢查 hoursto（例如 12 am to 1 pm）
-        hoursto_pattern = re.search(r'\b(\d{1,2}(?:\s)?(?:am|pm))\s*to\s*(\d{1,2}(?:\s)?(?:am|pm))\b', sentence, re.IGNORECASE)
-        if hoursto_pattern:
+        # Check hour-to-hour (hoursto)
+        m = re.search(hoursto_pattern, sentence, flags=re.IGNORECASE)
+        if m:
             tag = 'hoursto'
-            match = hoursto_pattern.group(0)
+            match = m.group(0)
         else:
-            # 檢查 hours（例如 3am, 11:00 pm）
-            hours_pattern = re.search(r'\b\d{1,2}(?::\d{2})?\s?(am|pm)\b', sentence, re.IGNORECASE)
-            if hours_pattern:
+            # Check single hour
+            m = re.search(hours_pattern, sentence, flags=re.IGNORECASE)
+            if m:
                 tag = 'hours'
-                match = hours_pattern.group(0)
+                match = m.group(0)
             else:
-                # 檢查 year（例如 1990-2099）
-                year_pattern = re.search(r'\b(19|20)\d{2}\b', sentence)
-                if year_pattern:
+                # Check year
+                m = re.search(year_pattern, sentence)
+                if m:
                     tag = 'year'
-                    match = year_pattern.group(0)
+                    match = m.group(0)
 
         data.append([sentence, tag, match])
 
-    df = pd.DataFrame(data, columns=['sentence', 'tag', 'match'])
-    return df
+    return pd.DataFrame(data, columns=["sentence", "tag", "match"])
 
-# 測試範例
+# 測試句子
 sentences = [
-    "The meeting is at 3am tomorrow.",
-    "She was born in 2009.",
-    "The session runs from 12 am to 1 pm.",
-    "Nothing special mentioned here.",
-    "We'll meet at 11:00 pm next week.",
-    "He graduated in 1995 and got a job."
+    "meeting: 3PM t 4PM",
+    "run from 10：30 t 11:30",
+    "slot 8pm _ 10PM",
+    "window 9:00 ~ 10:30",
+    "classic 11 am – 1 pm",
+    "He was born in 2008.",
+    "just 6am",
+    "Free time: 12 - 1",
+    "Lunch: 1pm until 2:30pm",
+    "Sleep: 10 - 6am"
 ]
 
-df_result = tag_sentences(sentences)
-print(df_result)
+df = tag_sentences(sentences)
+print(df)
