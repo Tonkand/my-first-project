@@ -1,0 +1,45 @@
+import re
+import pandas as pd
+
+def tag_sentences(sentences):
+    data = []
+    for sentence in sentences:
+        # 預設標記為 None
+        tag = None
+        match = None
+
+        # 檢查 hoursto（例如 12 am to 1 pm）
+        hoursto_pattern = re.search(r'\b(\d{1,2}(?:\s)?(?:am|pm))\s*to\s*(\d{1,2}(?:\s)?(?:am|pm))\b', sentence, re.IGNORECASE)
+        if hoursto_pattern:
+            tag = 'hoursto'
+            match = hoursto_pattern.group(0)
+        else:
+            # 檢查 hours（例如 3am, 11:00 pm）
+            hours_pattern = re.search(r'\b\d{1,2}(?::\d{2})?\s?(am|pm)\b', sentence, re.IGNORECASE)
+            if hours_pattern:
+                tag = 'hours'
+                match = hours_pattern.group(0)
+            else:
+                # 檢查 year（例如 1990-2099）
+                year_pattern = re.search(r'\b(19|20)\d{2}\b', sentence)
+                if year_pattern:
+                    tag = 'year'
+                    match = year_pattern.group(0)
+
+        data.append([sentence, tag, match])
+
+    df = pd.DataFrame(data, columns=['sentence', 'tag', 'match'])
+    return df
+
+# 測試範例
+sentences = [
+    "The meeting is at 3am tomorrow.",
+    "She was born in 2009.",
+    "The session runs from 12 am to 1 pm.",
+    "Nothing special mentioned here.",
+    "We'll meet at 11:00 pm next week.",
+    "He graduated in 1995 and got a job."
+]
+
+df_result = tag_sentences(sentences)
+print(df_result)
