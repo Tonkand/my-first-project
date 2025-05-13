@@ -1,0 +1,158 @@
+import spacy
+import re
+import pandas as pd
+
+nlp = spacy.load("en_core_web_sm")
+
+def create_match_rules(word_list, noun_terms=None):
+    word_list = word_list + noun_terms
+    match_rules = []
+    noun_terms = set(noun_terms or [])
+    for item in word_list:
+        item = item.strip().lower()
+        if item in noun_terms:
+            match_rules.append({"type": "keyword", "value": item})
+        elif " " in item:
+            parts = item.split()
+            if len(parts) == 2:
+                match_rules.append({"type": "phrasal", "value": (parts[0], parts[1])})
+        elif "-" in item or item.endswith("out") or item.endswith("over"):
+            match_rules.append({"type": "compound", "value": item})
+        else:
+            match_rules.append({"type": "lemma", "value": item})
+    return match_rules
+
+def analyze_text_with_flags(df, columns_name, raw_keywords, noun_terms, flag_label,
+                             ORG_mode=True, require_both_keyword_and_noun=True):
+    match_rules = create_match_rules(raw_keywords, noun_terms)
+
+    df['years'] = df[columns_name].str.findall(r"\b(19[0-9]{2}|20[0-9]{2})\b")
+    df['years_count'] = df['years'].apply(len)
+
+    docs = list(nlp.pipe(df[columns_name].tolist()))
+    df['spacy_data'] = [{
+        'doc': doc,
+        'token_info': [(t.text, t.lemma_, t.pos_, t.dep_, t.i) for t in doc],
+        'entity_info': [(e.text, e.label_, e.start) for e in doc.ents]
+    } for doc in docs]
+    df['token_info'] = df['spacy_data'].apply(lambda x: x['token_info'])
+    df['entity_info'] = df['spacy_data'].apply(lambda x: x['entity_info'])
+
+    def analyze_row(row):
+        tokens = row['token_info']
+        ents = row['entity_info']
+        doc = row['spacy_data']['doc']
+        years = row['years']
+        years_count = row['years_count']
+
+        token_texts = [t[0].lower() for t in tokens]
+        lemmas = [t[1].lower() for t in tokens]
+
+        important_indices = []
+        match_keyword = False
+        match_noun = False
+        match_org = False
+
+        for i, (text_tok, lemma, pos, _, idx) in enumerate(tokens):
+            for rule in match_rules:
+                if rule["type"] == "lemma" and lemma == rule["value"] and pos in ["VERB", "NOUN"]:
+                    important_indices.append(idx)
+                    match_keyword = True
+                elif rule["type"] == "compound" and (text_tok == rule["value"] or lemma == rule["value"]):
+                    important_indices.append(idx)
+                    match_keyword = True
+                elif rule["type"] == "keyword" and (lemma == rule["value"] or text_tok == rule["value"]):
+                    important_indices.append(idx)
+                    match_noun = True
+
+        for rule in match_rules:
+            if rule["type"] == "phrasal":
+                for i in range(len(tokens) - 1):
+                    if (lemmas[i], token_texts[i + 1]) == rule["value"]:
+                        important_indices.extend([tokens[i][4], tokens[i + 1][4]])
+                        match_keyword = True
+
+        excluded_subjects = {"government", "ministry", "department", "agency", "council"}
+        if ORG_mode:
+            for org_text, label, start in ents:
+                if label == "ORG" and org_text.lower() not in excluded_subjects:
+                    match_org = True
+                    important_indices.append(start)
+
+            fallback_orgs = ["apple", "microsoft", "tesla", "amazon", "google"]
+            if not match_org:
+                for token in token_texts:
+                    if token in fallback_orgs:
+                        match_org = True
+
+        if not match_noun:
+            has_excluded_subject = any(
+                lemma in excluded_subjects and dep in {"nsubj", "nsubjpass"}
+                for _, lemma, _, dep, _ in tokens
+            )
+        else:
+            has_excluded_subject = False
+
+        closest_year = None
+        if years and important_indices:
+            closest_year = min(
+                years,
+                key=lambda y: min(
+                    [abs(token.i - idx) for idx in important_indices for token in doc if token.text == y],
+                    default=float('inf')
+                )
+            )
+
+        voice = "unknown"
+        for _, _, _, dep, _ in tokens:
+            if dep == "nsubjpass":
+                voice = "passive"
+                break
+            elif dep == "nsubj":
+                voice = "active"
+
+        # ✅ 條件邏輯（使用 ORG_mode）
+        if require_both_keyword_and_noun:
+            if ORG_mode:
+                passed = match_keyword and (match_noun or match_org)
+            else:
+                passed = match_keyword and match_noun
+        else:
+            passed = match_keyword or match_noun or (match_org if ORG_mode else False)
+
+        if passed and years_count > 0 and not has_excluded_subject:
+            return flag_label, closest_year, voice
+
+        return "", None, voice
+
+    df[['flag', 'closest_year', 'voice']] = df.apply(analyze_row, axis=1, result_type='expand')
+    return df
+
+# 測試用資料
+df = pd.DataFrame({
+    'text': [
+        "Apple is looking at buying a U.K. startup for $1 billion.",
+        "This site gained control over the market and expanded in 1980.",
+        "In 2020, this site was gaining control rapidly, and the company saw growth in 2021.",
+        "Microsoft gained control in 1995 and continued to grow.",
+        "The government took possession of the land in 2010.",
+        "They finalized the acquisition in 2019.",
+        "The firm acquired the startup in 2021.",
+        "A buyout was completed by the company in 2005.",
+        "The ministry took control of the process in 2017.",
+        "Tesla expanded rapidly in 2023 after acquiring a battery company.",
+    ]
+})
+
+# 執行測試：所有條件 + ORG 要求（原本 strict_mode → ORG_mode）
+df_result = analyze_text_with_flags(
+    df, 'text',
+    raw_keywords=["gain", "buy", "purchase", "acquire", "control", "buyout", "acquisition", "take", "take over"],
+    noun_terms=["site", "firm", "company", "startup"],
+    flag_label="cata",
+    ORG_mode=True,
+    require_both_keyword_and_noun=True
+)
+
+# 顯示結果
+print(df_result[['text', 'flag', 'closest_year', 'voice']])
