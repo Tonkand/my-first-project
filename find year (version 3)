@@ -25,7 +25,7 @@ def create_match_rules(word_list, noun_terms=None):
 def analyze_text_with_flags(df, columns_name, raw_keywords, noun_terms, flag_label,
                              ORG_mode=True, require_both_keyword_and_noun=True,
                              custom_mode='year',
-                             hours_pattern=r'\b\d{1,2}(:\d{2})?\s*(am|pm)\b',
+                             hours_pattern=r'\b(?:\d{1,2}(?::\d{2})?\s*(?:am|pm))\b',
                              custom_keywords=None):
     
     match_rules = create_match_rules(raw_keywords, noun_terms)
