@@ -1,0 +1,32 @@
+import pandas as pd
+import spacy
+
+# 載入 spaCy 的英文模型（可根據需求換成其他語言）
+nlp = spacy.load("en_core_web_sm")
+
+def extract_keyword_sentences_spacy(df, text_column, keywords):
+    """
+    使用 spaCy 將段落切成句子，找出包含關鍵字的句子，產生新的 DataFrame。
+
+    參數：
+    - df: 原始 pandas DataFrame
+    - text_column: 欲分析的文字欄位名稱（字串）
+    - keywords: 要搜尋的關鍵字清單（如 ['firm', 'company']）
+
+    回傳：
+    - 新的 DataFrame，包含 columns: ['sentence', 'category', 'keyword']
+    """
+    results = []
+
+    for text in df[text_column].dropna():
+        doc = nlp(text)
+        for sent in doc.sents:
+            for kw in keywords:
+                if kw.lower() in sent.text.lower():
+                    results.append({
+                        'sentence': sent.text.strip(),
+                        'category': 'keyword',
+                        'keyword': kw
+                    })
+
+    return pd.DataFrame(results)
