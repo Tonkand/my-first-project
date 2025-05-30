@@ -1,0 +1,55 @@
+import pandas as pd
+import spacy
+from pyspark.sql.functions import pandas_udf, PandasUDFType, col, explode
+from pyspark.sql import SparkSession
+
+# 載入 spaCy 模型（關閉不必要模組加快速度）
+nlp = spacy.load("en_core_web_sm", disable=["ner", "tagger", "parser"])
+if not nlp.has_pipe("sentencizer"):
+    nlp.add_pipe("sentencizer")
+
+# 多分類關鍵字群組
+keyword_groups = {
+    'company_terms': ['firm', 'company'],
+    'location_terms': ['office', 'headquarters'],
+    'product_terms': ['device']
+}
+
+# 預先轉成小寫 set，加速查找
+lowered_keyword_groups = {
+    cat: set([kw.lower() for kw in kws]) for cat, kws in keyword_groups.items()
+}
+
+# 定義 pandas_udf：針對每個 cell 回傳多組 match（句子+分類+關鍵字）
+@pandas_udf("array<struct<sentence:string, category:string, keyword:string>>", PandasUDFType.SCALAR)
+def extract_sentences_keywords_udf(texts: pd.Series) -> pd.Series:
+    results = []
+    for doc in nlp.pipe(texts.fillna(""), batch_size=1000):
+        matches = []
+        for sent in doc.sents:
+            sent_text = sent.text.strip()
+            lower_sent = sent_text.lower()
+            for category, kw_set in lowered_keyword_groups.items():
+                for kw in kw_set:
+                    if kw in lower_sent:
+                        matches.append({
+                            "sentence": sent_text,
+                            "category": category,
+                            "keyword": kw
+                        })
+        results.append(matches)
+    return pd.Series(results)
+
+# 建立範例 Spark DataFrame
+df_spark = spark.createDataFrame([
+    ("The firm relocated its headquarters.",),
+    ("This device was approved by the company in our office.",),
+    ("Nothing interesting here.",)
+], ["text"])
+
+# 套用 UDF 並展平為多列
+df_result = df_spark.withColumn("keyword_matches", extract_sentences_keywords_udf(col("text"))) \
+                    .withColumn("match", explode("keyword_matches")) \
+                    .selectExpr("match.sentence", "match.category", "match.keyword")
+
+display(df_result)
