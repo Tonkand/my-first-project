@@ -148,11 +148,14 @@ lowered_keyword_groups = {
 
 # ✅ 關鍵字比對邏輯
 results = []
+
 for text in df['text'].dropna():
     doc = nlp(text)
     for sent in doc.sents:
         sent_text = sent.text.strip()
         lower = sent_text.lower()
+        matched = False  # 用來記錄這句有沒有匹配到關鍵字
+
         for cat, kws in lowered_keyword_groups.items():
             for kw in kws:
                 if kw in lower:
@@ -161,6 +164,16 @@ for text in df['text'].dropna():
                         "category": cat,
                         "keyword": kw
                     })
+                    matched = True  # 有匹配
+
+        # 如果沒有任何匹配，補上一行空欄位
+        if not matched:
+            results.append({
+                "sentence": sent_text,
+                "category": None,
+                "keyword": None
+            })
+
 
 # ✅ 回存成 Spark DataFrame（可選）
 df_result = pd.DataFrame(results)
