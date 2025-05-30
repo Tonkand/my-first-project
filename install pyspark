@@ -1,0 +1,9 @@
+from pyspark.sql import SparkSession
+
+# 建立 SparkSession
+spark = SparkSession.builder \
+    .appName("ReadCSVExample") \
+    .getOrCreate()
+
+
+df = spark.read.csv("your_file_path.csv", header=True, inferSchema=True)
