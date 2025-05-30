@@ -111,3 +111,60 @@ df_result = results_rdd.toDF(["sentence", "category", "keyword"])
 
 # 顯示結果
 display(df_result)
+
+
+########pandas 版
+from pyspark.sql import SparkSession
+import pandas as pd
+import spacy
+
+# ✅ 建立 SparkSession（如果還沒建立）
+spark = SparkSession.builder.getOrCreate()
+
+# ✅ 假設原始資料
+df_spark = spark.createDataFrame([
+    ("The firm relocated its headquarters.",),
+    ("The company approved the new device in our office.",),
+    ("Nothing interesting here.",)
+], ["text"])
+
+# ✅ 轉成 pandas DataFrame
+df = df_spark.toPandas()
+
+# ✅ 載入 spaCy 並啟用 sentencizer
+nlp = spacy.load("en_core_web_sm", disable=["ner", "tagger", "parser"])
+if not nlp.has_pipe("sentencizer"):
+    nlp.add_pipe("sentencizer")
+
+# ✅ 定義關鍵字
+keyword_groups = {
+    "company_terms": ["firm", "company"],
+    "location_terms": ["office", "headquarters"],
+    "product_terms": ["device"]
+}
+lowered_keyword_groups = {
+    cat: set(kw.lower() for kw in kws) for cat, kws in keyword_groups.items()
+}
+
+# ✅ 關鍵字比對邏輯
+results = []
+for text in df['text'].dropna():
+    doc = nlp(text)
+    for sent in doc.sents:
+        sent_text = sent.text.strip()
+        lower = sent_text.lower()
+        for cat, kws in lowered_keyword_groups.items():
+            for kw in kws:
+                if kw in lower:
+                    results.append({
+                        "sentence": sent_text,
+                        "category": cat,
+                        "keyword": kw
+                    })
+
+# ✅ 回存成 Spark DataFrame（可選）
+df_result = pd.DataFrame(results)
+df_result_spark = spark.createDataFrame(df_result)
+
+display(df_result_spark)
+
