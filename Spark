@@ -1,0 +1,53 @@
+import spacy
+import re
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import udf, col
+from pyspark.sql.types import StructType, StructField, StringType, ArrayType
+
+spark = SparkSession.builder.getOrCreate()
+nlp = spacy.load("en_core_web_sm")
+
+raw_keywords = ["acquire", "gain", "purchase", "buy", "take over"]
+noun_terms = ["firm", "startup", "company", "site"]
+custom_keywords = ["soon", "immediately", "right away", "as soon as possible", "later"]
+
+def process_text(text):
+    doc = nlp(text)
+    tokens = [(t.text, t.lemma_, t.pos_, t.dep_, t.i) for t in doc]
+    ents = [(e.text, e.label_, e.start) for e in doc.ents]
+
+    token_texts = [t[0].lower() for t in tokens]
+    lemmas = [t[1].lower() for t in tokens]
+
+    match_keyword = any(l in raw_keywords for l in lemmas)
+    match_noun = any(n in noun_terms for n in lemmas)
+    match_custom = next((k for k in custom_keywords if k in text.lower()), None)
+
+    flag = "cata" if (match_keyword or match_noun) and match_custom else ""
+    voice = "passive" if any(dep == "nsubjpass" for _, _, _, dep, _ in tokens) else "active" if any(dep == "nsubj" for _, _, _, dep, _ in tokens) else "unknown"
+    return (flag, match_custom, voice)
+
+# 定義輸出 schema
+schema = StructType([
+    StructField("flag", StringType()),
+    StructField("closest_term", StringType()),
+    StructField("voice", StringType())
+])
+
+process_text_udf = udf(process_text, schema)
+
+# 測試資料轉為 Spark DataFrame
+text_data = [
+    ("We will acquire the company as soon as possible.",),
+    ("The firm bought the site in 2020.",),
+    ("Tesla gained control right away and expanded later.",),
+    ("They will act immediately to take over.",),
+    ("Government took possession without notice.",)
+]
+df_spark = spark.createDataFrame(text_data, ["text"])
+
+# 套用 UDF
+df_result = df_spark.withColumn("result", process_text_udf(col("text"))) \
+    .select("text", "result.flag", "result.closest_term", "result.voice")
+
+df_result.show(truncate=False)
