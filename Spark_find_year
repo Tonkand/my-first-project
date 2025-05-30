@@ -51,3 +51,171 @@ df_result = df_spark.withColumn("result", process_text_udf(col("text"))) \
     .select("text", "result.flag", "result.closest_term", "result.voice")
 
 df_result.show(truncate=False)
+
+#######version 2
+import spacy
+import re
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, udf, lit
+from pyspark.sql.types import StructType, StructField, StringType, ArrayType
+
+# 初始化 spaCy 模型（只在 driver node 上跑）
+nlp = spacy.load("en_core_web_sm")
+
+# 建立 Spark session
+spark = SparkSession.builder.appName("SpaCy NLP Flags").getOrCreate()
+
+# 規則建構（broadcast）
+def create_match_rules(word_list, noun_terms=None):
+    word_list = word_list + (noun_terms or [])
+    match_rules = []
+    noun_terms = set(noun_terms or [])
+    for item in word_list:
+        item = item.strip().lower()
+        if item in noun_terms:
+            match_rules.append({"type": "keyword", "value": item})
+        elif " " in item:
+            parts = item.split()
+            if len(parts) == 2:
+                match_rules.append({"type": "phrasal", "value": (parts[0], parts[1])})
+        elif "-" in item or item.endswith("out") or item.endswith("over"):
+            match_rules.append({"type": "compound", "value": item})
+        else:
+            match_rules.append({"type": "lemma", "value": item})
+    return match_rules
+
+# Broadcast 所有參數
+raw_keywords = ["acquire", "gain", "purchase", "buy", "take over"]
+noun_terms = ["firm", "startup", "company", "site"]
+custom_keywords = ["soon", "immediately", "right away", "as soon as possible", "later"]
+flag_label = "cata"
+custom_mode = "keyword"  # 可為 year, hour, keyword
+require_both_keyword_and_noun = False
+ORG_mode = True
+hours_pattern = r'\b(?:\d{1,2}(?::\d{2})?\s*(?:am|pm))\b'
+match_rules = create_match_rules(raw_keywords, noun_terms)
+
+br_match_rules = spark.sparkContext.broadcast(match_rules)
+br_flag_label = spark.sparkContext.broadcast(flag_label)
+br_custom_keywords = spark.sparkContext.broadcast(custom_keywords)
+br_ORG_mode = spark.sparkContext.broadcast(ORG_mode)
+br_require_both = spark.sparkContext.broadcast(require_both_keyword_and_noun)
+
+# 定義 UDF 處理
+def analyze_text(text):
+    if not text:
+        return ("", None, "unknown", None)
+
+    doc = nlp(text)
+    tokens = [(t.text, t.lemma_, t.pos_, t.dep_, t.i) for t in doc]
+    ents = [(e.text, e.label_, e.start) for e in doc.ents]
+
+    token_texts = [t[0].lower() for t in tokens]
+    lemmas = [t[1].lower() for t in tokens]
+
+    match_rules = br_match_rules.value
+    custom_keywords = br_custom_keywords.value
+    flag_label = br_flag_label.value
+    require_both = br_require_both.value
+    ORG_mode = br_ORG_mode.value
+
+    important_indices = []
+    match_keyword = False
+    match_noun = False
+    match_org = False
+    excluded_subjects = {"government", "ministry", "department", "agency", "council"}
+
+    for text_tok, lemma, pos, _, idx in tokens:
+        for rule in match_rules:
+            if rule["type"] == "lemma" and lemma == rule["value"] and pos in ["VERB", "NOUN"]:
+                important_indices.append(idx)
+                match_keyword = True
+            elif rule["type"] == "compound" and (text_tok == rule["value"] or lemma == rule["value"]):
+                important_indices.append(idx)
+                match_keyword = True
+            elif rule["type"] == "keyword" and (lemma == rule["value"] or text_tok == rule["value"]):
+                important_indices.append(idx)
+                match_noun = True
+
+    for rule in match_rules:
+        if rule["type"] == "phrasal":
+            for i in range(len(tokens) - 1):
+                if (lemmas[i], token_texts[i + 1]) == rule["value"]:
+                    important_indices.extend([tokens[i][4], tokens[i + 1][4]])
+                    match_keyword = True
+
+    if ORG_mode:
+        for org_text, label, start in ents:
+            if label == "ORG" and org_text.lower() not in excluded_subjects:
+                match_org = True
+                important_indices.append(start)
+
+        if not match_org:
+            fallback_orgs = ["apple", "microsoft", "tesla", "amazon", "google"]
+            for token in token_texts:
+                if token in fallback_orgs:
+                    match_org = True
+
+    has_excluded_subject = not match_noun and any(
+        lemma in excluded_subjects and dep in {"nsubj", "nsubjpass"}
+        for _, lemma, _, dep, _ in tokens
+    )
+
+    matched_terms = [kw for kw in custom_keywords if kw in text.lower()]
+    has_time = bool(matched_terms)
+
+    closest_time = None
+    if matched_terms and important_indices:
+        def distance(kw):
+            return min(
+                abs(t.i - idx)
+                for idx in important_indices
+                for t in doc
+                if t.text.lower() in kw.split()
+            ) if any(w in text.lower() for w in kw.split()) else float('inf')
+
+        closest_time = min(matched_terms, key=distance)
+
+    voice = "unknown"
+    for _, _, _, dep, _ in tokens:
+        if dep == "nsubjpass":
+            voice = "passive"
+            break
+        elif dep == "nsubj":
+            voice = "active"
+
+    if require_both:
+        passed = match_keyword and (match_noun or match_org) if ORG_mode else match_keyword and match_noun
+    else:
+        passed = match_keyword or match_noun or (match_org if ORG_mode else False)
+
+    if passed and has_time and not has_excluded_subject:
+        return (flag_label, closest_time, voice, matched_terms[0] if matched_terms else None)
+    else:
+        return ("", None, voice, matched_terms[0] if matched_terms else None)
+
+# 回傳格式
+schema = StructType([
+    StructField("flag", StringType()),
+    StructField("closest_term", StringType()),
+    StructField("voice", StringType()),
+    StructField("matched_term", StringType())
+])
+
+analyze_udf = udf(analyze_text, schema)
+
+# 輸入資料
+df = spark.createDataFrame([
+    ("We will acquire the company as soon as possible.",),
+    ("The firm bought the site in 2020.",),
+    ("Tesla gained control right away and expanded later.",),
+    ("They will act immediately to take over.",),
+    ("Government took possession without notice.",)
+], ["text"])
+
+# 套用 UDF
+df_result = df.withColumn("result", analyze_udf(col("text"))) \
+    .select("text", "result.flag", "result.closest_term", "result.voice", "result.matched_term")
+
+df_result.display()
+
