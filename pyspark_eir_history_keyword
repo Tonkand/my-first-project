@@ -181,3 +181,66 @@ df_result_spark = spark.createDataFrame(df_result)
 
 display(df_result_spark)
 
+######新方法
+from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, StringType
+import spacy
+
+# 初始化 Spark
+spark = SparkSession.builder.getOrCreate()
+
+# 你的關鍵字分組
+keyword_groups = {
+    "company_terms": ["firm", "company"],
+    "location_terms": ["office", "headquarters"],
+    "product_terms": ["device"]
+}
+lowered_keyword_groups = {
+    cat: set([kw.lower() for kw in kws]) for cat, kws in keyword_groups.items()
+}
+
+# 建立原始 DataFrame
+df = spark.createDataFrame([
+    ("The firm moved its headquarters.",),
+    ("The company developed a new device in the office.",),
+    ("Nothing important here.",)
+], ["text"])
+
+# 定義每個 partition 的處理邏輯
+def process_partition(rows):
+    import spacy
+    nlp = spacy.load("en_core_web_sm", disable=["ner", "tagger", "parser"])
+    if not nlp.has_pipe("sentencizer"):
+        nlp.add_pipe("sentencizer")
+
+    for row in rows:
+        text = row['text']
+        if text is None:
+            continue
+        doc = nlp(text)
+        for sent in doc.sents:
+            sent_text = sent.text.strip()
+            sent_lower = sent_text.lower()
+            matched = False
+            for cat, kw_set in lowered_keyword_groups.items():
+                for kw in kw_set:
+                    if kw in sent_lower:
+                        yield (sent_text, cat, kw)
+                        matched = True
+            if not matched:
+                yield (sent_text, None, None)
+
+# 轉換為 RDD 處理
+rdd = df.rdd.mapPartitions(process_partition)
+
+# 定義輸出 schema 並轉為 DataFrame
+schema = StructType([
+    StructField("sentence", StringType(), True),
+    StructField("category", StringType(), True),
+    StructField("keyword", StringType(), True)
+])
+
+df_result = spark.createDataFrame(rdd, schema=schema)
+
+# 顯示結果
+display(df_result)
