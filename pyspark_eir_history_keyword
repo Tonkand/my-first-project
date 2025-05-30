@@ -53,3 +53,61 @@ df_result = df_spark.withColumn("keyword_matches", extract_sentences_keywords_ud
                     .selectExpr("match.sentence", "match.category", "match.keyword")
 
 display(df_result)
+
+
+#########easy one
+
+import spacy
+
+# 載入 spaCy 並啟用 sentencizer（更快）
+nlp = spacy.load("en_core_web_sm", disable=["ner", "parser", "tagger"])
+if not nlp.has_pipe("sentencizer"):
+    nlp.add_pipe("sentencizer")
+
+# 關鍵字定義
+keyword_groups = {
+    "company_terms": ["firm", "company"],
+    "location_terms": ["office", "headquarters"],
+    "product_terms": ["device"]
+}
+
+# 預轉換為小寫 + set，加快查找
+lowered_keyword_groups = {
+    cat: set(kw.lower() for kw in kws)
+    for cat, kws in keyword_groups.items()
+}
+
+from pyspark.sql import SparkSession
+
+spark = SparkSession.builder.getOrCreate()
+
+df = spark.createDataFrame([
+    ("The firm relocated its headquarters.",),
+    ("The company approved the new device in our office.",),
+    ("Nothing interesting here.",)
+], ["text"])
+
+def extract_sentences_with_keywords(row):
+    text = row['text']
+    results = []
+    if not text:
+        return results
+    
+    doc = nlp(text)
+    for sent in doc.sents:
+        sent_text = sent.text.strip()
+        sent_lower = sent_text.lower()
+        for category, kw_set in lowered_keyword_groups.items():
+            for kw in kw_set:
+                if kw in sent_lower:
+                    results.append((sent_text, category, kw))
+    return results
+
+# 用 rdd.flatMap 套用處理
+results_rdd = df.rdd.flatMap(extract_sentences_with_keywords)
+
+# 轉回 DataFrame
+df_result = results_rdd.toDF(["sentence", "category", "keyword"])
+
+# 顯示結果
+display(df_result)
