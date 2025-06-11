@@ -34,6 +34,21 @@ pdf = pd.DataFrame({
     "name": ["Alice", "Bob"]
 })
 
+#####filters
+
+df_filtered = df.filter(df["amount"] != 0)
+from pyspark.sql.functions import col
+df_filtered = df.filter((col("amount") != 0) & (col("count") != 0))
+
+
+###多個
+non_zero_cols = ["a", "b", "c"]
+from functools import reduce
+condition = reduce(lambda x, y: x | (col(y) != 0), non_zero_cols[1:], (col(non_zero_cols[0]) != 0))
+
+
+df_filtered = df.filter(condition)
+
 # 转换为 Spark DataFrame
 df = spark.createDataFrame(pdf)
 df.show()
