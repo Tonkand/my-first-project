@@ -19,3 +19,21 @@ for row in df.toLocalIterator():
     for col in df.columns:
         print(f"{col}: {row[col]}")
     print("-----")
+
+
+####convert to spark
+from pyspark.sql import SparkSession
+import pandas as pd
+
+# 初始化 SparkSession
+spark = SparkSession.builder.appName("PandasToSpark").getOrCreate()
+
+# 创建 pandas DataFrame
+pdf = pd.DataFrame({
+    "id": [1, 2],
+    "name": ["Alice", "Bob"]
+})
+
+# 转换为 Spark DataFrame
+df = spark.createDataFrame(pdf)
+df.show()
