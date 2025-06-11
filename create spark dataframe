@@ -12,3 +12,10 @@ columns = ["id", "name", "age"]
 
 df = spark.createDataFrame(data, schema=columns)
 df.show()
+
+
+####show rows
+for row in df.toLocalIterator():
+    for col in df.columns:
+        print(f"{col}: {row[col]}")
+    print("-----")
