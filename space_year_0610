@@ -487,3 +487,168 @@ schema = StructType([
 final_df = spark.createDataFrame(results, schema=schema)
 
 import ace_tools as tools; tools.display_dataframe_to_user(name="Driver-Based NLP Result", dataframe=final_df.toPandas())
+
+
+######
+import re
+import spacy
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import explode, udf, col
+from pyspark.sql.types import StructType, StructField, StringType, ArrayType
+
+# 初始化 Spark 和 spaCy
+spark = SparkSession.builder.appName("Sentence-Level NLP").getOrCreate()
+nlp = spacy.load("en_core_web_sm")
+
+# 自訂參數
+raw_keywords = ["acquire", "gain", "purchase", "buy", "take over"]
+noun_terms = ["firm", "startup", "company", "site"]
+custom_keywords = ["soon", "immediately", "right away", "as soon as possible", "later"]
+flag_label = "cata"
+custom_mode = "year"
+require_both_keyword_and_noun = False
+ORG_mode = True
+hours_pattern = r'\b(?:\d{1,2}(?::\d{2})?\s*(?:am|pm))\b'
+excluded_subjects = {"government", "ministry", "department", "agency", "council"}
+fallback_orgs = {"apple", "tesla", "google", "amazon", "microsoft"}
+
+def create_match_rules(word_list, noun_terms=None):
+    word_list = word_list + (noun_terms or [])
+    match_rules = []
+    noun_terms = set(noun_terms or [])
+    for item in word_list:
+        item = item.strip().lower()
+        if item in noun_terms:
+            match_rules.append({"type": "keyword", "value": item})
+        elif " " in item:
+            parts = item.split()
+            if len(parts) == 2:
+                match_rules.append({"type": "phrasal", "value": (parts[0], parts[1])})
+        elif "-" in item or item.endswith("out") or item.endswith("over"):
+            match_rules.append({"type": "compound", "value": item})
+        else:
+            match_rules.append({"type": "lemma", "value": item})
+    return match_rules
+
+match_rules = create_match_rules(raw_keywords, noun_terms)
+
+def analyze_sentences(text):
+    if not text:
+        return []
+
+    doc = nlp(text)
+    results = []
+
+    for sent in doc.sents:
+        sentence = sent.text.strip()
+        if not sentence:
+            continue
+
+        doc_sent = nlp(sentence)
+        tokens = [(t.text, t.lemma_, t.pos_, t.dep_, t.i) for t in doc_sent]
+        ents = [(e.text, e.label_, e.start) for e in doc_sent.ents]
+        token_texts = [t[0].lower() for t in tokens]
+        lemmas = [t[1].lower() for t in tokens]
+
+        important_indices = []
+        match_keyword = False
+        match_noun = False
+        match_org = False
+
+        for text_tok, lemma, pos, _, idx in tokens:
+            for rule in match_rules:
+                if rule["type"] == "lemma" and lemma == rule["value"] and pos in ["VERB", "NOUN"]:
+                    important_indices.append(idx)
+                    match_keyword = True
+                elif rule["type"] == "compound" and (text_tok == rule["value"] or lemma == rule["value"]):
+                    important_indices.append(idx)
+                    match_keyword = True
+                elif rule["type"] == "keyword" and (lemma == rule["value"] or text_tok == rule["value"]):
+                    important_indices.append(idx)
+                    match_noun = True
+
+        for rule in match_rules:
+            if rule["type"] == "phrasal":
+                for i in range(len(tokens) - 1):
+                    if (lemmas[i], token_texts[i + 1]) == rule["value"]:
+                        important_indices.extend([tokens[i][4], tokens[i + 1][4]])
+                        match_keyword = True
+
+        if ORG_mode:
+            for org_text, label, start in ents:
+                if label == "ORG" and org_text.lower() not in excluded_subjects:
+                    match_org = True
+                    important_indices.append(start)
+            if not match_org:
+                for token in token_texts:
+                    if token in fallback_orgs:
+                        match_org = True
+
+        has_excluded_subject = not match_noun and any(
+            lemma in excluded_subjects and dep in {"nsubj", "nsubjpass"}
+            for _, lemma, _, dep, _ in tokens
+        )
+
+        if custom_mode == "year":
+            time_matches = re.findall(r"\b(19[0-9]{2}|20[0-9]{2})\b", sentence)
+            time_matches += re.findall(r"\b\d{1,2}/\d{1,2}/\d{4}\b", sentence)
+        elif custom_mode == "hour":
+            time_matches = re.findall(hours_pattern, sentence, re.IGNORECASE)
+            time_matches = [t.strip() for t in time_matches]
+        elif custom_mode == "keyword":
+            time_matches = [kw for kw in custom_keywords if kw in sentence.lower()]
+        else:
+            time_matches = []
+
+        closest_time = None
+        if time_matches and important_indices:
+            def safe_distance(t):
+                distances = [
+                    abs(token.i - idx)
+                    for idx in important_indices
+                    for token in doc_sent
+                    if token.text.lower() in t.lower().split()
+                ]
+                return min(distances) if distances else float('inf')
+            closest_time = min(time_matches, key=safe_distance)
+
+        voice = "unknown"
+        for _, _, _, dep, _ in tokens:
+            if dep == "nsubjpass":
+                voice = "passive"
+                break
+            elif dep == "nsubj":
+                voice = "active"
+
+        if require_both_keyword_and_noun:
+            passed = match_keyword and (match_noun or match_org)
+        else:
+            passed = match_keyword or match_noun or (match_org if ORG_mode else False)
+
+        if passed and time_matches and not has_excluded_subject:
+            results.append((sentence, flag_label, closest_time, voice, time_matches[0]))
+        else:
+            results.append((sentence, "", None, voice, time_matches[0] if time_matches else None))
+
+    return results
+
+# 註冊 UDF
+schema = ArrayType(StructType([
+    StructField("sentence", StringType()),
+    StructField("flag", StringType()),
+    StructField("closest_term", StringType()),
+    StructField("voice", StringType()),
+    StructField("matched_term", StringType())
+]))
+analyze_udf = udf(analyze_sentences, schema)
+
+# 測試資料
+df = spark.createDataFrame([
+    ("We will acquire the company as soon as possible. The firm bought the site in 2020. Government took possession without notice.",)
+], ["text"])
+
+df_result = df.withColumn("sentences", analyze_udf(col("text"))) \
+              .selectExpr("explode(sentences) as result") \
+              .selectExpr("result.sentence", "result.flag", "result.closest_term", "result.voice", "result.matched_term")
+
+import ace_tools as tools; tools.display_dataframe_to_user(name="Sentence-Level NLP Result", dataframe=df_result.toPandas())
