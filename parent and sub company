@@ -1,0 +1,83 @@
+import spacy
+
+# 載入 spaCy 模型
+nlp = spacy.load("en_core_web_sm")
+
+# 關鍵詞集合（可擴展）
+ownership_keywords = {
+    "acquire", "acquired", "buy", "bought", "purchase", "purchased", "take over",
+    "taken over", "merge", "merged", "merged with", "absorb", "absorbed",
+    "acquisition", "takeover", "was bought by", "was acquired by"
+}
+
+structure_keywords = {
+    "own", "owns", "subsidiary of", "parent company", "ultimate owner", "holding company"
+}
+
+
+def extract_parent_and_subsidiary(paragraph: str):
+    """
+    從段落中提取所有涉及 parent / subsidiary 關係的句子與公司名。
+    每個公司各成一行，並標註其角色（parent 或 subsidiary）。
+    :param paragraph: 多句話構成的段落
+    :return: List[Tuple[str, str, str]] → (句子, 公司名稱, 類別)
+    """
+    results = []
+    if not paragraph:
+        return results
+
+    doc = nlp(paragraph)
+    for sent in doc.sents:
+        sentence = sent.text.strip()
+        lower = sentence.lower()
+
+        has_keyword = any(kw in lower for kw in ownership_keywords.union(structure_keywords))
+        if not has_keyword:
+            continue
+
+        orgs = [ent for ent in sent.ents if ent.label_ == "ORG"]
+        if not orgs:
+            continue
+
+        # 判斷角色：誰是主語、誰是被動語者（基本依存關係 + fallback）
+        for ent in orgs:
+            label = None
+            # 找 ent 所屬 token
+            for token in sent:
+                if ent.start <= token.i <= ent.end:
+                    # 主語 → parent
+                    if token.dep_ in ("nsubj", "nsubjpass"):
+                        label = "parent"
+                    # 被動、受詞 → subsidiary
+                    elif token.dep_ in ("dobj", "pobj", "attr", "appos"):
+                        label = "subsidiary"
+                    break
+
+            if not label:
+                # fallback：根據位置猜測
+                idx = sentence.find(ent.text)
+                if idx < len(sentence) / 2:
+                    label = "parent"
+                else:
+                    label = "subsidiary"
+
+            results.append((sentence, ent.text, label))
+
+    return results
+
+
+from pyspark.sql.functions import udf, explode
+from pyspark.sql.types import StructType, StructField, StringType, ArrayType
+
+from parent_company_extractor import extract_parent_and_subsidiary
+
+# 回傳 StructType：句子、公司名稱、角色
+schema = ArrayType(
+    StructType([
+        StructField("sentence", StringType(), True),
+        StructField("company", StringType(), True),
+        StructField("role", StringType(), True)
+    ])
+)
+
+extract_udf = udf(extract_parent_and_subsidiary, schema)
