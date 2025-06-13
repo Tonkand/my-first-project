@@ -1,0 +1,54 @@
+import spacy
+
+nlp = spacy.load("en_core_web_sm")
+
+# 擴展關鍵語義詞
+ownership_keywords = {
+    "acquire", "acquired", "buy", "bought", "own", "owns", "purchase", "purchased", 
+    "take over", "taken over", "merge", "merged", "merged with", "subsidiary of",
+    "parent company", "ultimate owner", "holding company", "absorbed", "acquisition",
+    "takeover", "was bought by", "was acquired by"
+}
+
+def extract_parent_company_sentences(paragraph):
+    results = []
+    if not paragraph:
+        return results
+
+    doc = nlp(paragraph)
+    for sent in doc.sents:
+        sentence = sent.text.strip()
+        lower = sentence.lower()
+
+        # 判斷句子是否包含任一 ownership 關鍵語意（支持 multi-word）
+        if not any(kw in lower for kw in ownership_keywords):
+            continue
+
+        # 抓出 ORG entity
+        orgs = [ent for ent in sent.ents if ent.label_ == "ORG"]
+        if not orgs:
+            results.append(f"{sentence}|||")
+            continue
+
+        # 嘗試從依存結構找主語的 ORG
+        parent = None
+        for ent in orgs:
+            for token in sent:
+                if ent.start <= token.i <= ent.end:
+                    if token.dep_ in ("nsubj", "nsubjpass", "compound", "appos", "attr"):
+                        parent = ent.text
+                        break
+            if parent:
+                break
+
+        if not parent:
+            parent = orgs[0].text  # fallback：第一個 ORG
+
+        results.append(f"{sentence}|||{parent}")
+    return results
+
+
+from pyspark.sql.functions import udf, explode
+from pyspark.sql.types import ArrayType, StringType
+
+extract_udf = udf(extract_parent_company_sentences, ArrayType(StringType()))
