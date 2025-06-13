@@ -1,0 +1,7 @@
+def extract_html_link(text):
+    match = re.search(r'href\s*=\s*["\']([^"\']+)["\'].*?>(.*?)<', text)
+    if match:
+        url = match.group(1).strip()
+        name = match.group(2).strip()
+        return pd.Series([name, url])
+    return pd.Series([None, None])
