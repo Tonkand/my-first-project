@@ -101,6 +101,7 @@ df_final.show(truncate=False)
 #########
 
 import spacy
+import traceback
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import udf, explode
 from pyspark.sql.types import StructType, StructField, StringType, ArrayType
@@ -123,7 +124,7 @@ all_keywords = ownership_keywords.union(structure_keywords)
 # 稱謂詞
 title_words = {"mr.", "mrs.", "ms.", "dr.", "prof.", "miss", "sir", "madam"}
 
-# 判斷是否為人名前綴詞
+# 判斷是否是人名前綴
 def is_title_name(token, sent):
     i = token.i
     if i > 0:
@@ -132,64 +133,64 @@ def is_title_name(token, sent):
             return True
     return False
 
-# 主 UDF 邏輯
+# 主處理邏輯 UDF（含錯誤訊息顯示）
 def extract_entities_with_roles(paragraph):
     results = []
-
-    # 安全處理空值
     try:
+        print(">>> Processing paragraph:", paragraph)
+
         if not isinstance(paragraph, str) or not paragraph.strip():
+            print(">>> Skipped: empty or invalid paragraph")
             return [("", "", "")]
-    except:
-        return [("", "", "")]
 
-    doc = nlp(paragraph)
-    for sent in doc.sents:
-        sentence = sent.text.strip()
-        lower = sentence.lower()
+        doc = nlp(paragraph)
+        for sent in doc.sents:
+            sentence = sent.text.strip()
+            lower = sentence.lower()
 
-        has_keyword = any(kw in lower for kw in all_keywords)
+            has_keyword = any(kw in lower for kw in all_keywords)
+            person_names = set(ent.text for ent in sent.ents if ent.label_ == "PERSON")
+            orgs = [ent for ent in sent.ents if ent.label_ == "ORG"]
 
-        person_names = set(ent.text for ent in sent.ents if ent.label_ == "PERSON")
-        orgs = [ent for ent in sent.ents if ent.label_ == "ORG"]
-
-        # fallback 抓公司名（補 ORG）
-        if not orgs and has_keyword:
-            guessed = []
-            for token in sent:
-                if (
-                    token.text[0].isupper()
-                    and token.pos_ in ("PROPN", "NOUN")
-                    and len(token.text) > 2
-                    and token.text.lower() not in {"firm", "company", "group"}
-                    and token.text not in person_names
-                    and not is_title_name(token, sent)
-                    and token.text.lower() not in title_words
-                ):
-                    guessed.append(token.text)
-            if guessed:
-                orgs = [spacy.tokens.Span(doc, token.i, token.i+1, label="ORG")
-                        for token in sent if token.text in guessed]
-
-        # 抽取 parent/subsidiary 資訊
-        if has_keyword and orgs:
-            for ent in orgs:
-                label = None
+            if not orgs and has_keyword:
+                guessed = []
                 for token in sent:
-                    if ent.start <= token.i <= ent.end:
-                        if token.dep_ in ("nsubj", "nsubjpass"):
-                            label = "parent"
-                        elif token.dep_ in ("dobj", "pobj", "attr", "appos"):
-                            label = "subsidiary"
-                        break
-                if not label:
-                    label = "parent" if sentence.find(ent.text) < len(sentence) / 2 else "subsidiary"
-                results.append((sentence, ent.text, label))
-        else:
-            # 句子沒關聯也保留
-            results.append((sentence, "", ""))
+                    if (
+                        token.text[0].isupper()
+                        and token.pos_ in ("PROPN", "NOUN")
+                        and len(token.text) > 2
+                        and token.text.lower() not in {"firm", "company", "group"}
+                        and token.text not in person_names
+                        and not is_title_name(token, sent)
+                        and token.text.lower() not in title_words
+                    ):
+                        guessed.append(token.text)
+                if guessed:
+                    orgs = [spacy.tokens.Span(doc, token.i, token.i+1, label="ORG")
+                            for token in sent if token.text in guessed]
 
-    return results
+            if has_keyword and orgs:
+                for ent in orgs:
+                    label = None
+                    for token in sent:
+                        if ent.start <= token.i <= ent.end:
+                            if token.dep_ in ("nsubj", "nsubjpass"):
+                                label = "parent"
+                            elif token.dep_ in ("dobj", "pobj", "attr", "appos"):
+                                label = "subsidiary"
+                            break
+                    if not label:
+                        label = "parent" if sentence.find(ent.text) < len(sentence) / 2 else "subsidiary"
+                    results.append((sentence, ent.text, label))
+            else:
+                results.append((sentence, "", ""))
+
+        return results
+
+    except Exception as e:
+        print("!!! ERROR processing paragraph:", paragraph)
+        traceback.print_exc()
+        return [("ERROR IN PARAGRAPH", "", "")]
 
 # Spark UDF 註冊
 schema = ArrayType(StructType([
@@ -199,13 +200,14 @@ schema = ArrayType(StructType([
 ]))
 extract_udf = udf(extract_entities_with_roles, schema)
 
-# 測試資料（包含 None、空字串）
+# 測試資料（含 None, 空字串）
 data = [
     ("NVIDIA bought this firm. No useful info here. Meta owns Instagram.",),
     ("Google was acquired by Alphabet. The parent company of Apple is Apple Inc.",),
     ("The firm was found in 2021 by Mr. Yongjun Tu who is the owner of the company.",),
     ("",),
-    (None,)
+    (None,),
+    ("This paragraph might be problematic if it's too long or contains errors",)
 ]
 df = spark.createDataFrame(data, ["paragraph"])
 
@@ -220,3 +222,4 @@ df_final = df_final.selectExpr(
 
 # 顯示結果
 df_final.show(truncate=False)
+
