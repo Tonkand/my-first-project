@@ -1,0 +1,82 @@
+import spacy
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import udf, explode
+from pyspark.sql.types import StructType, StructField, StringType, ArrayType
+
+# 初始化 Spark 和 spaCy
+spark = SparkSession.builder.appName("ParentSubsidiaryExtractor").getOrCreate()
+nlp = spacy.load("en_core_web_sm")
+
+# 關鍵詞集合（擴展後）
+ownership_keywords = {
+    "acquire", "acquired", "buy", "bought", "purchase", "purchased", "take over",
+    "taken over", "merge", "merged", "merged with", "absorb", "absorbed",
+    "acquisition", "takeover", "was bought by", "was acquired by"
+}
+structure_keywords = {
+    "own", "owns", "subsidiary of", "parent company", "ultimate owner", "holding company"
+}
+all_keywords = ownership_keywords.union(structure_keywords)
+
+# UDF：段落切句 → 分析每句 → 找公司 + 分類
+def extract_entities_with_roles(paragraph):
+    results = []
+    if not paragraph:
+        return results
+
+    doc = nlp(paragraph)
+    for sent in doc.sents:
+        sentence = sent.text.strip()
+        lower = sentence.lower()
+
+        if not any(kw in lower for kw in all_keywords):
+            continue
+
+        orgs = [ent for ent in sent.ents if ent.label_ == "ORG"]
+        if not orgs:
+            continue
+
+        for ent in orgs:
+            label = None
+            for token in sent:
+                if ent.start <= token.i <= ent.end:
+                    # 主詞 = parent
+                    if token.dep_ in ("nsubj", "nsubjpass"):
+                        label = "parent"
+                    # 受詞/附屬詞 = subsidiary
+                    elif token.dep_ in ("dobj", "pobj", "attr", "appos"):
+                        label = "subsidiary"
+                    break
+            if not label:
+                # fallback：位置猜測
+                label = "parent" if sentence.find(ent.text) < len(sentence) / 2 else "subsidiary"
+
+            results.append((sentence, ent.text, label))
+    return results
+
+# 註冊 Spark UDF，輸出結構為 StructType
+schema = ArrayType(StructType([
+    StructField("sentence", StringType(), True),
+    StructField("company", StringType(), True),
+    StructField("role", StringType(), True)
+]))
+extract_udf = udf(extract_entities_with_roles, schema)
+
+# 測試資料（段落格式）
+data = [
+    ("NVIDIA bought this firm. No useful info here. Meta owns Instagram.",),
+    ("Google was acquired by Alphabet. The parent company of Apple is Apple Inc.",)
+]
+df = spark.createDataFrame(data, ["paragraph"])
+
+# 應用 UDF 並展開結果
+df_result = df.withColumn("entities", extract_udf("paragraph"))
+df_final = df_result.select(explode("entities").alias("entity_info"))
+df_final = df_final.selectExpr(
+    "entity_info.sentence",
+    "entity_info.company",
+    "entity_info.role"
+)
+
+# 顯示結果
+df_final.show(truncate=False)
