@@ -120,7 +120,19 @@ structure_keywords = {
 }
 all_keywords = ownership_keywords.union(structure_keywords)
 
-# 主體邏輯 UDF：輸入段落 → 拆句 → 找公司 → 分角色
+# 額外：稱謂（用來幫助判斷人名）
+title_words = {"mr.", "mrs.", "ms.", "dr.", "prof.", "miss", "sir", "madam"}
+
+# 人名判斷輔助
+def is_title_name(token, sent):
+    i = token.i
+    if i > 0:
+        prev = sent[i - 1].text.lower()
+        if prev in title_words:
+            return True
+    return False
+
+# 主邏輯
 def extract_entities_with_roles(paragraph):
     results = []
     if not paragraph:
@@ -133,11 +145,11 @@ def extract_entities_with_roles(paragraph):
 
         has_keyword = any(kw in lower for kw in all_keywords)
 
-        # 對該句辨識出 PERSON 與 ORG
+        # 抓 PERSON 與 ORG
         person_names = set(ent.text for ent in sent.ents if ent.label_ == "PERSON")
         orgs = [ent for ent in sent.ents if ent.label_ == "ORG"]
 
-        # fallback：如果沒抓到 ORG，但有關鍵字 → 嘗試猜測
+        # fallback：沒抓到 ORG 時嘗試補上
         if not orgs and has_keyword:
             guessed = []
             for token in sent:
@@ -146,17 +158,16 @@ def extract_entities_with_roles(paragraph):
                     and token.pos_ in ("PROPN", "NOUN")
                     and len(token.text) > 2
                     and token.text.lower() not in {"firm", "company", "group"}
+                    and token.text not in person_names
+                    and not is_title_name(token, sent)
                 ):
                     guessed.append(token.text)
-            # 去除人名
-            guessed = [g for g in guessed if g not in person_names]
-
-            # 模擬為 ORG 實體
+            # 補猜為 ORG
             if guessed:
                 orgs = [spacy.tokens.Span(doc, token.i, token.i+1, label="ORG")
                         for token in sent if token.text in guessed]
 
-        # 判斷每個 ORG 的角色
+        # 角色判斷
         if has_keyword and orgs:
             for ent in orgs:
                 label = None
@@ -171,12 +182,11 @@ def extract_entities_with_roles(paragraph):
                     label = "parent" if sentence.find(ent.text) < len(sentence) / 2 else "subsidiary"
                 results.append((sentence, ent.text, label))
         else:
-            # 沒公司或關鍵詞也保留句子，空值填空
             results.append((sentence, "", ""))
 
     return results
 
-# 註冊 Spark UDF
+# Spark UDF 註冊
 schema = ArrayType(StructType([
     StructField("sentence", StringType(), True),
     StructField("company", StringType(), True),
@@ -192,7 +202,7 @@ data = [
 ]
 df = spark.createDataFrame(data, ["paragraph"])
 
-# 套用 UDF
+# 應用
 df_result = df.withColumn("entities", extract_udf("paragraph"))
 df_final = df_result.select(explode("entities").alias("entity_info"))
 df_final = df_final.selectExpr(
@@ -203,5 +213,3 @@ df_final = df_final.selectExpr(
 
 # 顯示結果
 df_final.show(truncate=False)
-
-
