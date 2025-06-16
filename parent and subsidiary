@@ -105,7 +105,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import udf, explode
 from pyspark.sql.types import StructType, StructField, StringType, ArrayType
 
-# 初始化 Spark 與 spaCy
+# 初始化 Spark 和 spaCy
 spark = SparkSession.builder.appName("ParentSubsidiaryExtractor").getOrCreate()
 nlp = spacy.load("en_core_web_sm")
 
@@ -120,10 +120,10 @@ structure_keywords = {
 }
 all_keywords = ownership_keywords.union(structure_keywords)
 
-# 額外：稱謂（用來幫助判斷人名）
+# 稱謂詞
 title_words = {"mr.", "mrs.", "ms.", "dr.", "prof.", "miss", "sir", "madam"}
 
-# 人名判斷輔助
+# 判斷是否是人名前綴
 def is_title_name(token, sent):
     i = token.i
     if i > 0:
@@ -132,7 +132,7 @@ def is_title_name(token, sent):
             return True
     return False
 
-# 主邏輯
+# 主邏輯：切句、抽公司、分類、過濾人名與稱謂
 def extract_entities_with_roles(paragraph):
     results = []
     if not paragraph:
@@ -145,11 +145,10 @@ def extract_entities_with_roles(paragraph):
 
         has_keyword = any(kw in lower for kw in all_keywords)
 
-        # 抓 PERSON 與 ORG
         person_names = set(ent.text for ent in sent.ents if ent.label_ == "PERSON")
         orgs = [ent for ent in sent.ents if ent.label_ == "ORG"]
 
-        # fallback：沒抓到 ORG 時嘗試補上
+        # fallback：猜測可能公司
         if not orgs and has_keyword:
             guessed = []
             for token in sent:
@@ -160,14 +159,14 @@ def extract_entities_with_roles(paragraph):
                     and token.text.lower() not in {"firm", "company", "group"}
                     and token.text not in person_names
                     and not is_title_name(token, sent)
+                    and token.text.lower() not in title_words
                 ):
                     guessed.append(token.text)
-            # 補猜為 ORG
             if guessed:
                 orgs = [spacy.tokens.Span(doc, token.i, token.i+1, label="ORG")
                         for token in sent if token.text in guessed]
 
-        # 角色判斷
+        # 判斷角色
         if has_keyword and orgs:
             for ent in orgs:
                 label = None
@@ -182,11 +181,12 @@ def extract_entities_with_roles(paragraph):
                     label = "parent" if sentence.find(ent.text) < len(sentence) / 2 else "subsidiary"
                 results.append((sentence, ent.text, label))
         else:
+            # 保留句子，但公司與角色為空
             results.append((sentence, "", ""))
 
     return results
 
-# Spark UDF 註冊
+# 註冊 UDF
 schema = ArrayType(StructType([
     StructField("sentence", StringType(), True),
     StructField("company", StringType(), True),
@@ -202,7 +202,7 @@ data = [
 ]
 df = spark.createDataFrame(data, ["paragraph"])
 
-# 應用
+# 執行流程
 df_result = df.withColumn("entities", extract_udf("paragraph"))
 df_final = df_result.select(explode("entities").alias("entity_info"))
 df_final = df_final.selectExpr(
@@ -213,3 +213,4 @@ df_final = df_final.selectExpr(
 
 # 顯示結果
 df_final.show(truncate=False)
+
