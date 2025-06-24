@@ -1,0 +1,77 @@
+from functools import partial
+from pyspark.sql.functions import lit
+
+# 原始数据
+df_input = spark.createDataFrame([
+    ("We will acquire the company as soon as possible.",),
+    ("The firm bought the site in 2020.",),
+    ("Tesla gained control right away and expanded later.",),
+    ("They will act immediately to take over.",),
+    ("Government took possession without notice.",),
+    ("They want to find inspection report at 3:30 pm.",),
+    ("Product was moved to new location in 2019.",),
+], ["text"])
+
+# 多组参数配置
+param_list = [
+    {
+        "raw_keywords": ["find"],
+        "noun_terms": ["inspection"],
+        "custom_keywords": [""],
+        "flag_label": "data1",
+        "custom_mode": "hour",
+        "require_both_keyword_and_noun": True,
+        "ORG_mode": True
+    },
+    {
+        "raw_keywords": ["transfer", "move"],
+        "noun_terms": ["new location"],
+        "custom_keywords": [""],
+        "flag_label": "data2",
+        "custom_mode": "year",
+        "require_both_keyword_and_noun": False,
+        "ORG_mode": False
+    },
+    {
+        "raw_keywords": ["acquire", "gain", "purchase", "buy", "take over"],
+        "noun_terms": ["firm", "startup", "company", "site"],
+        "custom_keywords": ["soon", "immediately", "right away", "as soon as possible", "later"],
+        "flag_label": "data3",
+        "custom_mode": "keyword",
+        "require_both_keyword_and_noun": False,
+        "ORG_mode": False
+    }
+]
+
+result_dfs = []
+
+# 分组处理
+for config in param_list:
+    # 重建广播变量
+    match_rules = create_match_rules(config["raw_keywords"], config["noun_terms"])
+    br_match_rules = spark.sparkContext.broadcast(match_rules)
+    br_flag_label = spark.sparkContext.broadcast(config["flag_label"])
+    br_custom_keywords = spark.sparkContext.broadcast(config["custom_keywords"])
+    br_custom_mode = spark.sparkContext.broadcast(config["custom_mode"])
+    br_hours_pattern = spark.sparkContext.broadcast(hours_pattern)
+    br_ORG_mode = spark.sparkContext.broadcast(config["ORG_mode"])
+    br_require_both = spark.sparkContext.broadcast(config["require_both_keyword_and_noun"])
+
+    # 包一层 UDF（必须重新定义，否则变量不生效）
+    analyze_udf = udf(analyze_text, schema)
+
+    # 应用 UDF
+    df_out = df_input.withColumn("result", analyze_udf(col("text"))) \
+        .select("text", 
+                lit(config["flag_label"]).alias("rule_id"),  # 标记来自哪个规则组
+                "result.flag", "result.closest_term", "result.voice", "result.matched_term")
+
+    result_dfs.append(df_out)
+
+# 合并所有结果
+df_all = result_dfs[0]
+for df_r in result_dfs[1:]:
+    df_all = df_all.union(df_r)
+
+# 展示结果
+import ace_tools as tools; tools.display_dataframe_to_user(name="Multi-rule NLP Result", dataframe=df_all.toPandas())
