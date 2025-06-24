@@ -4,23 +4,42 @@ import pandas as pd
 import ast
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, explode, lit, pandas_udf
+from pyspark.sql.functions import col, lit, udf, explode
 from pyspark.sql.types import StructType, StructField, StringType, ArrayType
 
-# Spark 初始化
-spark = SparkSession.builder.appName("NLP with Error Logging").getOrCreate()
-
-# spaCy 加载（必须放在 driver 全局）
+# 初始化 Spark 和 spaCy
+spark = SparkSession.builder.appName("Full NLP Pipeline with UDF").getOrCreate()
 nlp = spacy.load("en_core_web_sm")
 
-# 🧠 段落拆句函数（pandas_udf）
-@pandas_udf(ArrayType(StringType()))
-def split_sentences_pd_udf(paragraphs: pd.Series) -> pd.Series:
-    return paragraphs.fillna("").astype(str).apply(
-        lambda para: [sent.text.strip() for sent in nlp(para).sents]
-    )
+# ---------- 🧩 段落 → 拆句 ----------
+def split_sentences(paragraph):
+    if not isinstance(paragraph, str) or not paragraph.strip():
+        return []
+    try:
+        doc = nlp(paragraph)
+        return [sent.text.strip() for sent in doc.sents]
+    except Exception as e:
+        return []  # ✅ 安全 fallback
 
-# 🧱 广播匹配规则生成函数
+split_sentences_udf = udf(split_sentences, ArrayType(StringType()))
+
+# ---------- 🧩 参数设置 ----------
+param_df = pd.DataFrame({
+    "raw_keywords": ["['find']", "['transfer', 'move']", "['acquire', 'gain', 'purchase', 'buy', 'take over']"],
+    "noun_terms": ["['inspection']", "['new location']", "['firm', 'startup', 'company', 'site']"],
+    "custom_keywords": ["['']", "['']", "['soon', 'immediately', 'right away', 'as soon as possible', 'later']"],
+    "flag_label": ["data1", "data2", "data3"],
+    "custom_mode": ["hour", "year", "keyword"],
+    "require_both_keyword_and_noun": [True, False, False],
+    "ORG_mode": [True, False, False]
+})
+for col_name in ["raw_keywords", "noun_terms", "custom_keywords"]:
+    param_df[col_name] = param_df[col_name].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
+param_list = param_df.to_dict(orient="records")
+
+hours_pattern = r'\b(?:\d{1,2}(?::\d{2})?\s*(?:am|pm))\b'
+
+# ---------- 🧩 匹配规则构建 ----------
 def create_match_rules(word_list, noun_terms=None):
     word_list = word_list + (noun_terms or [])
     match_rules = []
@@ -39,11 +58,11 @@ def create_match_rules(word_list, noun_terms=None):
             match_rules.append({"type": "lemma", "value": item})
     return match_rules
 
-# ⚠️ 包含错误捕捉的分析函数
+# ---------- 🧩 主分析函数 ----------
 def analyze_text(text):
     try:
         if not isinstance(text, str) or not text.strip():
-            return ("", None, "unknown", None, None)
+            return ("", None, "unknown", None, None)  # 🛠 改动：返回五元组，多一个 error_msg
 
         doc = nlp(text)
         tokens = [(t.text, t.lemma_, t.pos_, t.dep_, t.i) for t in doc]
@@ -99,13 +118,11 @@ def analyze_text(text):
         if custom_mode == "year":
             time_matches = re.findall(r"\b(19[0-9]{2}|20[0-9]{2})\b", text)
         elif custom_mode == "hour":
-            time_matches = re.findall(r"\b(?:\d{1,2}(?::\d{2})?\s*(?:am|pm))\b", text, re.IGNORECASE)
+            time_matches = re.findall(hours_pattern, text, re.IGNORECASE)
         elif custom_mode == "keyword":
             time_matches = [kw for kw in custom_keywords if kw in text.lower()]
         else:
             time_matches = []
-
-        has_time = bool(time_matches)
 
         closest_time = None
         if time_matches and important_indices:
@@ -131,91 +148,30 @@ def analyze_text(text):
         else:
             passed = match_keyword or match_noun or (match_org if ORG_mode else False)
 
-        if passed and has_time and not has_excluded_subject:
-            return (flag_label, closest_time, voice, time_matches[0] if time_matches else None, None)
+        if passed and time_matches and not has_excluded_subject:
+            return (flag_label, closest_time, voice, time_matches[0], None)  # ✅ 成功返回 None 错误
         else:
             return ("", None, voice, time_matches[0] if time_matches else None, None)
 
     except Exception as e:
-        return ("", None, "error", None, f"{type(e).__name__}: {str(e)}")
+        return ("", None, "error", None, f"{type(e).__name__}: {str(e)}")  # ✅ 捕捉异常返回错误信息
 
-# ✅ 返回结构（包含 error_msg 字段）
+# ---------- 🛠 改动：增加 error_msg 字段 ----------
 schema = StructType([
     StructField("flag", StringType()),
     StructField("closest_term", StringType()),
     StructField("voice", StringType()),
     StructField("matched_term", StringType()),
-    StructField("error_msg", StringType())
+    StructField("error_msg", StringType())  # ✅ 新增字段
 ])
 
-from pyspark.sql.functions import udf
-analyze_udf = udf(analyze_text, schema)
+# ---------- 🧩 示例段落 ----------
+df_paragraphs = spark.createDataFrame([
+    ("We will acquire the company as soon as possible. Then we will move to a new location.",),
+    ("The product was transferred in 2020. It arrived late.",),
+    ("They want to find the inspection report at 3:30 pm.",),
+    ("",),  # ✅ 空行测试
+    (None,)  # ✅ None 测试
+], ["paragraph"])
 
-# ---------- 示例参数 ----------
-param_df = pd.DataFrame({
-    "raw_keywords": ["['find']", "['transfer', 'move']", "['acquire', 'gain']"],
-    "noun_terms": ["['inspection']", "['new location']", "['firm']"],
-    "custom_keywords": ["['']", "['']", "['soon', 'immediately']"],
-    "flag_label": ["data1", "data2", "data3"],
-    "custom_mode": ["hour", "year", "keyword"],
-    "require_both_keyword_and_noun": [True, False, False],
-    "ORG_mode": [True, False, False]
-})
-for col in ["raw_keywords", "noun_terms", "custom_keywords"]:
-    param_df[col] = param_df[col].apply(ast.literal_eval)
-param_list = param_df.to_dict(orient="records")
-
-# ---------- 示例段落输入 ----------
-df_paragraphs_pd = pd.DataFrame({
-    "paragraph": [
-        "We will acquire the company as soon as possible. Then we will move.",
-        "The firm is registered with U.S. FDA through 12/31/2023",
-        "They want to find the inspection report at 3:30 pm.",
-        "Government will act soon.",
-        None  # 故意放一个空值
-    ]
-})
-
-df_paragraphs = spark.createDataFrame(df_paragraphs_pd)
-
-# 拆句为单行
-df_input = df_paragraphs.withColumn("sentences", split_sentences_pd_udf(col("paragraph"))) \
-                        .withColumn("text", explode(col("sentences"))) \
-                        .select("text")
-
-# ---------- 多规则处理 ----------
-result_dfs = []
-
-for config in param_list:
-    # 广播参数
-    br_match_rules = spark.sparkContext.broadcast(create_match_rules(config["raw_keywords"], config["noun_terms"]))
-    br_flag_label = spark.sparkContext.broadcast(config["flag_label"])
-    br_custom_keywords = spark.sparkContext.broadcast(config["custom_keywords"])
-    br_custom_mode = spark.sparkContext.broadcast(config["custom_mode"])
-    br_hours_pattern = spark.sparkContext.broadcast(r"\b(?:\d{1,2}(?::\d{2})?\s*(?:am|pm))\b")
-    br_ORG_mode = spark.sparkContext.broadcast(config["ORG_mode"])
-    br_require_both = spark.sparkContext.broadcast(config["require_both_keyword_and_noun"])
-
-    df_out = df_input.withColumn("result", analyze_udf(col("text"))) \
-        .select(
-            col("text"),
-            lit(config["flag_label"]).alias("rule_id"),
-            col("result.flag"),
-            col("result.closest_term"),
-            col("result.voice"),
-            col("result.matched_term"),
-            col("result.error_msg")
-        )
-    result_dfs.append(df_out)
-
-# 合并结果
-df_all = result_dfs[0]
-for df_r in result_dfs[1:]:
-    df_all = df_all.union(df_r)
-
-# ✅ 保存错误日志为 CSV
-df_errors = df_all.filter(col("error_msg").isNotNull())
-df_errors.toPandas().to_csv("analyze_text_errors.csv", index=False)
-
-# ✅ 展示结果（成功 + 错误行）
-import ace_tools as tools; tools.display_dataframe_to_user(name="NLP Analysis with Error Log", dataframe=df_all.toPandas())
+df_input = df_paragraphs.withColumn("sentences", split_sentences_udf(col("paragraph"))) \
