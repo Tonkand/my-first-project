@@ -12,10 +12,14 @@ nlp = spacy.load("en_core_web_sm")
 
 # 句子分割函数（段落拆句）
 def split_sentences(paragraph):
-    if not paragraph:
+    if not isinstance(paragraph, str) or not paragraph.strip():
         return []
-    doc = nlp(paragraph)
-    return [sent.text.strip() for sent in doc.sents]
+    try:
+        doc = nlp(paragraph)
+        return [sent.text.strip() for sent in doc.sents]
+    except Exception as e:
+        return []
+
 
 # 注册 UDF
 split_sentences_udf = udf(split_sentences, ArrayType(StringType()))
