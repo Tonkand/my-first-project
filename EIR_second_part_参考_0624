@@ -1,0 +1,210 @@
+import spacy
+import re
+import pandas as pd
+import ast
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, lit, udf, explode
+from pyspark.sql.types import StructType, StructField, StringType, ArrayType
+
+# Initialize Spark and spaCy
+spark = SparkSession.builder.appName("Full NLP Pipeline with spaCy").getOrCreate()
+nlp = spacy.load("en_core_web_sm")
+
+# 句子分割函数（段落拆句）
+def split_sentences(paragraph):
+    if not paragraph:
+        return []
+    doc = nlp(paragraph)
+    return [sent.text.strip() for sent in doc.sents]
+
+# 注册 UDF
+split_sentences_udf = udf(split_sentences, ArrayType(StringType()))
+
+# ---------- 配置规则参数 ----------
+param_df = pd.DataFrame({
+    "raw_keywords": ["['find']", "['transfer', 'move']", "['acquire', 'gain', 'purchase', 'buy', 'take over']"],
+    "noun_terms": ["['inspection']", "['new location']", "['firm', 'startup', 'company', 'site']"],
+    "custom_keywords": ["['']", "['']", "['soon', 'immediately', 'right away', 'as soon as possible', 'later']"],
+    "flag_label": ["data1", "data2", "data3"],
+    "custom_mode": ["hour", "year", "keyword"],
+    "require_both_keyword_and_noun": [True, False, False],
+    "ORG_mode": [True, False, False]
+})
+
+# 转换为真正的列表格式
+for col_name in ["raw_keywords", "noun_terms", "custom_keywords"]:
+    param_df[col_name] = param_df[col_name].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
+
+param_list = param_df.to_dict(orient="records")
+hours_pattern = r'\b(?:\d{1,2}(?::\d{2})?\s*(?:am|pm))\b'
+
+# ---------- 匹配规则构建函数 ----------
+def create_match_rules(word_list, noun_terms=None):
+    word_list = word_list + (noun_terms or [])
+    match_rules = []
+    noun_terms = set(noun_terms or [])
+    for item in word_list:
+        item = item.strip().lower()
+        if item in noun_terms:
+            match_rules.append({"type": "keyword", "value": item})
+        elif " " in item:
+            parts = item.split()
+            if len(parts) == 2:
+                match_rules.append({"type": "phrasal", "value": (parts[0], parts[1])})
+        elif "-" in item or item.endswith("out") or item.endswith("over"):
+            match_rules.append({"type": "compound", "value": item})
+        else:
+            match_rules.append({"type": "lemma", "value": item})
+    return match_rules
+
+# ---------- 主分析函数 ----------
+def analyze_text(text):
+    if not text:
+        return ("", None, "unknown", None)
+
+    doc = nlp(text)
+    tokens = [(t.text, t.lemma_, t.pos_, t.dep_, t.i) for t in doc]
+    ents = [(e.text, e.label_, e.start) for e in doc.ents]
+
+    token_texts = [t[0].lower() for t in tokens]
+    lemmas = [t[1].lower() for t in tokens]
+
+    match_rules = br_match_rules.value
+    custom_keywords = br_custom_keywords.value
+    flag_label = br_flag_label.value
+    require_both = br_require_both.value
+    ORG_mode = br_ORG_mode.value
+    custom_mode = br_custom_mode.value
+    hours_pattern = br_hours_pattern.value
+
+    important_indices = []
+    match_keyword = False
+    match_noun = False
+    match_org = False
+    excluded_subjects = {"government", "ministry", "department", "agency", "council"}
+
+    for text_tok, lemma, pos, _, idx in tokens:
+        for rule in match_rules:
+            if rule["type"] == "lemma" and lemma == rule["value"] and pos in ["VERB", "NOUN"]:
+                important_indices.append(idx)
+                match_keyword = True
+            elif rule["type"] == "compound" and (text_tok == rule["value"] or lemma == rule["value"]):
+                important_indices.append(idx)
+                match_keyword = True
+            elif rule["type"] == "keyword" and (lemma == rule["value"] or text_tok == rule["value"]):
+                important_indices.append(idx)
+                match_noun = True
+
+    for rule in match_rules:
+        if rule["type"] == "phrasal":
+            for i in range(len(tokens) - 1):
+                if (lemmas[i], token_texts[i + 1]) == rule["value"]:
+                    important_indices.extend([tokens[i][4], tokens[i + 1][4]])
+                    match_keyword = True
+
+    if ORG_mode:
+        for org_text, label, start in ents:
+            if label == "ORG" and org_text.lower() not in excluded_subjects:
+                match_org = True
+                important_indices.append(start)
+        if not match_org:
+            fallback_orgs = ["apple", "microsoft", "tesla", "amazon", "google"]
+            for token in token_texts:
+                if token in fallback_orgs:
+                    match_org = True
+
+    has_excluded_subject = not match_noun and any(
+        lemma in excluded_subjects and dep in {"nsubj", "nsubjpass"}
+        for _, lemma, _, dep, _ in tokens
+    )
+
+    if custom_mode == "year":
+        time_matches = re.findall(r"\b(19[0-9]{2}|20[0-9]{2})\b", text)
+    elif custom_mode == "hour":
+        time_matches = re.findall(hours_pattern, text, re.IGNORECASE)
+        time_matches = [''.join(x).strip() if isinstance(x, tuple) else x.strip() for x in time_matches]
+    elif custom_mode == "keyword":
+        time_matches = [kw for kw in custom_keywords if kw in text.lower()]
+    else:
+        time_matches = []
+
+    has_time = bool(time_matches)
+
+    closest_time = None
+    if time_matches and important_indices:
+        def distance(t):
+            return min(
+                abs(tk.i - idx)
+                for idx in important_indices
+                for tk in doc
+                if tk.text.lower() in t.lower().split()
+            ) if any(w in text.lower() for w in t.lower().split()) else float('inf')
+        closest_time = min(time_matches, key=distance)
+
+    voice = "unknown"
+    for _, _, _, dep, _ in tokens:
+        if dep == "nsubjpass":
+            voice = "passive"
+            break
+        elif dep == "nsubj":
+            voice = "active"
+
+    if require_both:
+        passed = match_keyword and (match_noun or match_org) if ORG_mode else match_keyword and match_noun
+    else:
+        passed = match_keyword or match_noun or (match_org if ORG_mode else False)
+
+    if passed and has_time and not has_excluded_subject:
+        return (flag_label, closest_time, voice, time_matches[0] if time_matches else None)
+    else:
+        return ("", None, voice, time_matches[0] if time_matches else None)
+
+# 返回结构定义
+schema = StructType([
+    StructField("flag", StringType()),
+    StructField("closest_term", StringType()),
+    StructField("voice", StringType()),
+    StructField("matched_term", StringType())
+])
+
+# ---------- 段落输入 + 拆句 ----------
+df_paragraphs = spark.createDataFrame([
+    ("We will acquire the company as soon as possible. Then we will move to a new location.",),
+    ("The product was transferred in 2020. It arrived late.",),
+    ("They want to find the inspection report at 3:30 pm.",)
+], ["paragraph"])
+
+# 拆句后变为 df_input
+df_input = df_paragraphs.withColumn("sentences", split_sentences_udf(col("paragraph"))) \
+                        .select(explode(col("sentences")).alias("text"))
+
+# ---------- 多规则处理 ----------
+result_dfs = []
+
+for config in param_list:
+    # 广播变量
+    match_rules = create_match_rules(config["raw_keywords"], config["noun_terms"])
+    br_match_rules = spark.sparkContext.broadcast(match_rules)
+    br_flag_label = spark.sparkContext.broadcast(config["flag_label"])
+    br_custom_keywords = spark.sparkContext.broadcast(config["custom_keywords"])
+    br_custom_mode = spark.sparkContext.broadcast(config["custom_mode"])
+    br_hours_pattern = spark.sparkContext.broadcast(hours_pattern)
+    br_ORG_mode = spark.sparkContext.broadcast(config["ORG_mode"])
+    br_require_both = spark.sparkContext.broadcast(config["require_both_keyword_and_noun"])
+
+    # 应用 UDF
+    analyze_udf = udf(analyze_text, schema)
+    df_out = df_input.withColumn("result", analyze_udf(col("text"))) \
+        .select("text", 
+                lit(config["flag_label"]).alias("rule_id"),
+                "result.flag", "result.closest_term", "result.voice", "result.matched_term")
+
+    result_dfs.append(df_out)
+
+# 合并所有结果
+df_all = result_dfs[0]
+for df_r in result_dfs[1:]:
+    df_all = df_all.union(df_r)
+
+# 展示最终结果
+import ace_tools as tools; tools.display_dataframe_to_user(name="Multi-rule NLP Result", dataframe=df_all.toPandas())
