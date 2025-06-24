@@ -175,3 +175,46 @@ df_paragraphs = spark.createDataFrame([
 ], ["paragraph"])
 
 df_input = df_paragraphs.withColumn("sentences", split_sentences_udf(col("paragraph"))) \
+                        .select(explode(col("sentences")).alias("text"))
+
+# ---------- 🧩 多组规则处理 ----------
+result_dfs = []
+
+for config in param_list:
+    # 广播变量
+    br_match_rules = spark.sparkContext.broadcast(create_match_rules(config["raw_keywords"], config["noun_terms"]))
+    br_flag_label = spark.sparkContext.broadcast(config["flag_label"])
+    br_custom_keywords = spark.sparkContext.broadcast(config["custom_keywords"])
+    br_custom_mode = spark.sparkContext.broadcast(config["custom_mode"])
+    br_hours_pattern = spark.sparkContext.broadcast(hours_pattern)
+    br_ORG_mode = spark.sparkContext.broadcast(config["ORG_mode"])
+    br_require_both = spark.sparkContext.broadcast(config["require_both_keyword_and_noun"])
+
+    # 注册 UDF
+    analyze_udf = udf(analyze_text, schema)
+
+    # 应用分析
+    df_out = df_input.withColumn("result", analyze_udf(col("text"))) \
+        .select(
+            col("text"),
+            lit(config["flag_label"]).alias("rule_id"),
+            col("result.flag"),
+            col("result.closest_term"),
+            col("result.voice"),
+            col("result.matched_term"),
+            col("result.error_msg")  # ✅ 输出错误字段
+        )
+    result_dfs.append(df_out)
+
+# ---------- 🧩 合并结果 ----------
+df_all = result_dfs[0]
+for df_r in result_dfs[1:]:
+    df_all = df_all.union(df_r)
+
+# ---------- ✅ 新增：保存错误日志 ----------
+df_all.filter(col("error_msg").isNotNull()) \
+      .toPandas().to_csv("analyze_text_errors.csv", index=False)  # ✅ 保存错误日志到 CSV
+
+# ---------- 🧩 展示分析结果 ----------
+import ace_tools as tools
+tools.display_dataframe_to_user(name="Multi-rule NLP Result", dataframe=df_all.toPandas())
