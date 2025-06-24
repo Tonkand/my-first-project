@@ -178,6 +178,10 @@ df_paragraphs = spark.createDataFrame([
 df_input = df_paragraphs.withColumn("sentences", split_sentences_udf(col("paragraph"))) \
                         .select(explode(col("sentences")).alias("text"))
 
+df_input = df_paragraphs.select("paragraph") \
+                        .withColumn("sentences", split_sentences_udf(col("paragraph"))) \
+                        .select(explode(col("sentences")).alias("text"))
+
 # ---------- 多规则处理 ----------
 result_dfs = []
 
