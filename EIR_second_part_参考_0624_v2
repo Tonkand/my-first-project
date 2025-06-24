@@ -126,14 +126,15 @@ def analyze_text(text):
 
         closest_time = None
         if time_matches and important_indices:
-            def distance(t):
-                return min(
-                    abs(tk.i - idx)
-                    for idx in important_indices
-                    for tk in doc
-                    if tk.text.lower() in t.lower().split()
-                ) if any(w in text.lower() for w in t.lower().split()) else float('inf')
-            closest_time = min(time_matches, key=distance)
+            valid_times = []
+            for t in time_matches:
+                try:
+                    dist = distance(t)
+                    if dist != float('inf'):
+                        valid_times.append((t, dist))
+                except:
+                    continue
+            closest_time = min(valid_times, key=lambda x: x[1])[0] if valid_times else None
 
         voice = "unknown"
         for _, _, _, dep, _ in tokens:
