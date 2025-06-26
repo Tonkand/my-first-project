@@ -1,0 +1,116 @@
+import spacy
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, explode, udf
+from pyspark.sql.types import StringType, ArrayType, MapType
+
+# 初始化 Spark 和 spaCy
+spark = SparkSession.builder.appName("CompanyRelationshipExtract").getOrCreate()
+nlp = spacy.load("en_core_web_sm")
+
+# ✅ 分句函数（处理空字符串、None）
+def split_sentences(paragraph):
+    if not isinstance(paragraph, str) or not paragraph.strip():
+        return []
+    try:
+        doc = nlp(paragraph)
+        return [sent.text.strip() for sent in doc.sents]
+    except Exception:
+        return []
+
+split_sentences_udf = udf(split_sentences, ArrayType(StringType()))
+
+# ✅ 抽取公司结构关系（保留无匹配句子）
+def extract_company_relationships(text):
+    results = []
+    try:
+        if not isinstance(text, str) or not text.strip():
+            return []
+
+        doc = nlp(text)
+        orgs = [(ent.text.strip(), ent.start) for ent in doc.ents if ent.label_ == "ORG"]
+        lower_text = text.lower()
+        parent_kw = {"acquire", "buy", "purchase", "take over", "gain control"}
+        sub_kw = {"subsidiary", "wholly owned", "owned by", "controlled by"}
+        matched = False
+
+        # Pattern 1
+        if any(kw in lower_text for kw in sub_kw):
+            sub = parent = None
+            for i, token in enumerate(doc):
+                if any(kw in token.text.lower() for kw in sub_kw):
+                    left_orgs = [org for org in orgs if org[1] < token.i]
+                    right_orgs = [org for org in orgs if org[1] > token.i]
+                    if left_orgs:
+                        sub = left_orgs[-1][0]
+                    if right_orgs:
+                        parent = right_orgs[0][0]
+                    break
+            if sub:
+                results.append({"sentence": text, "company": sub, "role": "subsidiary"})
+                matched = True
+            if parent:
+                results.append({"sentence": text, "company": parent, "role": "parent"})
+                matched = True
+
+        # Pattern 2
+        for token in doc:
+            if token.lemma_.lower() in parent_kw:
+                parent = sub = None
+                for child in token.children:
+                    if child.dep_ in {"nsubj", "nsubjpass"}:
+                        for ent in doc.ents:
+                            if ent.start <= child.i <= ent.end and ent.label_ == "ORG":
+                                parent = ent.text
+                    elif child.dep_ in {"dobj", "pobj"}:
+                        for ent in doc.ents:
+                            if ent.start <= child.i <= ent.end and ent.label_ == "ORG":
+                                sub = ent.text
+                if parent:
+                    results.append({"sentence": text, "company": parent, "role": "parent"})
+                    matched = True
+                if sub:
+                    results.append({"sentence": text, "company": sub, "role": "subsidiary"})
+                    matched = True
+
+        # Pattern 3
+        if "parent" in lower_text:
+            for org_text, org_idx in orgs:
+                next_tokens = " ".join([t.text.lower() for t in doc[org_idx:org_idx+5]])
+                if "parent" in next_tokens:
+                    results.append({"sentence": text, "company": org_text, "role": "parent"})
+                    matched = True
+
+        # 若未匹配任何规则，仍保留公司 ORG 或空值
+        if not matched:
+            if orgs:
+                for org_text, _ in orgs:
+                    results.append({"sentence": text, "company": org_text, "role": "none"})
+            else:
+                results.append({"sentence": text, "company": "", "role": "none"})
+
+    except Exception as e:
+        results.append({"sentence": text, "company": "", "role": f"error: {str(e)}"})
+
+    return results
+
+relationship_udf = udf(extract_company_relationships, ArrayType(MapType(StringType(), StringType())))
+
+# ✅ 示例段落数据（含空、正常、无公司名）
+df_paragraphs = spark.createDataFrame([
+    ("MPI is a wholly owned subsidiary of McGuffey Inc.",),
+    ("Apple is a global tech firm.",),
+    ("",),
+    (None,),
+    ("NVIDIA is the parent company of ARM Ltd.",),
+    ("Google acquired DeepMind.",),
+    ("No company name or relationship here.",)
+], ["paragraph"])
+
+# ✅ 步骤 1：拆句
+df_sentences = df_paragraphs.withColumn("sentences", split_sentences_udf(col("paragraph"))) \
+                             .select(explode(col("sentences")).alias("text"))
+
+# ✅ 步骤 2：抽取公司关系
+df_result = df_sentences.withColumn("relationships", relationship_udf(col("text"))) \
+                        .withColumn("rel", explode(col("relationships"))) \
+                        .select("rel.sentence", "rel.company", "rel.role")
