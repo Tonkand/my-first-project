@@ -177,14 +177,18 @@ df_paragraphs = spark.createDataFrame([
     (None,)
 ], ["paragraph"])
 
+# ✅ 只选 paragraph 列
+only_para_df = df_paragraphs.select("paragraph")
+
 # ---------- 使用新版拆句 ----------
-df_sentences_exploded = df_paragraphs.withColumn("sentences", split_sentences_udf_spark(col("paragraph"))) \
+df_sentences_exploded = only_para_df.withColumn("sentences", split_sentences_udf_spark(col("paragraph"))) \
     .withColumn("sentence_map", explode(col("sentences"))) \
     .select(
-        monotonically_increasing_id().alias("temp_id"),
+        (monotonically_increasing_id() + 1).alias("DOCUMENT"),
         col("sentence_map.sid").cast(IntegerType()).alias("sid"),
         col("sentence_map.sentence").alias("text")
     )
+
 
 # 生成连续 DOCUMENT ID
 df_sentences_exploded = df_sentences_exploded \
