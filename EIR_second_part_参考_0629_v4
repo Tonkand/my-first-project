@@ -11,30 +11,22 @@ from pyspark.sql.types import StructType, StructField, StringType, ArrayType, In
 spark = SparkSession.builder.appName("Full NLP Pipeline with UDF").getOrCreate()
 nlp = spacy.load("en_core_web_sm")
 
-# ---------- ✅ 新版 split_sentences ----------
-def split_sentences_udf(paragraph, document_idx):
+# ---------- ✅ 普通 UDF 版本 split_sentences ----------
+def split_sentences(paragraph, document_idx):
     if not isinstance(paragraph, str) or not paragraph.strip():
         return []
     try:
         doc = nlp(paragraph)
         return [{
-            "DOCUMENT": document_idx,
-            "sid": idx + 1,
+            "DOCUMENT": str(document_idx),
+            "sid": str(idx + 1),
             "sentence": sent.text.strip()
         } for idx, sent in enumerate(doc.sents) if sent.text.strip()]
     except:
         return []
 
-# 注册 Spark UDF（带 document_idx 参数）
-from pyspark.sql.functions import pandas_udf, PandasUDFType
-
-@pandas_udf(ArrayType(MapType(StringType(), StringType())), PandasUDFType.SCALAR)
-def split_sentences_udf_spark(paragraph_series, document_idx_series):
-    results = []
-    for para, doc_idx in zip(paragraph_series, document_idx_series):
-        records = split_sentences_udf(para, int(doc_idx))
-        results.append(records)
-    return pd.Series(results)
+# 注册普通 UDF（返回 Array of Map）
+split_sentences_udf_spark = udf(split_sentences, ArrayType(MapType(StringType(), StringType())))
 
 # ---------- 🧩 参数设置 ----------
 param_df = pd.DataFrame({
@@ -195,9 +187,8 @@ df_sentences_exploded = df_para_only.withColumn("sentences", split_sentences_udf
         col("sentence_map.sentence").alias("text")
     )
 
-# ---------- 单规则处理（删除 rule_id） ----------
-config = param_list[2]  # 例如只保留 data3 规则，避免 rule_id
-
+# ---------- 单规则处理 ----------
+config = param_list[2]
 br_match_rules = spark.sparkContext.broadcast(create_match_rules(config["raw_keywords"], config["noun_terms"]))
 br_flag_label = spark.sparkContext.broadcast(config["flag_label"])
 br_custom_keywords = spark.sparkContext.broadcast(config["custom_keywords"])
