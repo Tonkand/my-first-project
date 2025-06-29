@@ -29,6 +29,15 @@ def wrap_split_sentences(paragraph, idx):
 
 split_sentences_udf_spark = udf(wrap_split_sentences, ArrayType(MapType(StringType(), StringType())))
 
+# ✅ 新版本：统一 keywords
+ownership_kw = {
+    "owner", "acquire", "buy", "purchase", "take over",
+    "gain control", "subsidiary", "controlled", "owned"
+}
+
+# ✅ 排除不是公司的词
+excluded_orgs = {"fda", "us fda", "u.s. fda", "government", "agency"}
+
 # ✅ 抽取公司关系
 def extract_company_relationships(text):
     results = []
