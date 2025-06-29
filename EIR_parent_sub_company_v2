@@ -29,7 +29,7 @@ def wrap_split_sentences(paragraph, idx):
 
 split_sentences_udf_spark = udf(wrap_split_sentences, ArrayType(MapType(StringType(), StringType())))
 
-# ✅ 抽取公司结构关系（保留无匹配句子）
+# ✅ 抽取公司关系
 def extract_company_relationships(text):
     results = []
     try:
@@ -38,8 +38,7 @@ def extract_company_relationships(text):
 
         doc = nlp(text)
 
-        excluded_orgs = {"fda", "us fda", "u.s. fda", "government", "agency"}
-
+        # orgs 去除排除词
         orgs = [
             (ent.text.strip(), ent.start)
             for ent in doc.ents
@@ -47,32 +46,12 @@ def extract_company_relationships(text):
         ]
 
         lower_text = text.lower()
-        parent_kw = {"acquire", "buy", "purchase", "take over", "gain control"}
-        sub_kw = {"subsidiary", "wholly owned", "owned by", "controlled by"}
         matched = False
 
-        # Pattern 1
-        if any(kw in lower_text for kw in sub_kw):
-            sub = parent = None
-            for i, token in enumerate(doc):
-                if any(kw in token.text.lower() for kw in sub_kw):
-                    left_orgs = [org for org in orgs if org[1] < token.i]
-                    right_orgs = [org for org in orgs if org[1] > token.i]
-                    if left_orgs:
-                        sub = left_orgs[-1][0]
-                    if right_orgs:
-                        parent = right_orgs[0][0]
-                    break
-            if sub:
-                results.append({"sentence": text, "company": sub, "role": "subsidiary"})
-                matched = True
-            if parent:
-                results.append({"sentence": text, "company": parent, "role": "parent"})
-                matched = True
-
-        # Pattern 2
+        # Pattern 1: token text 在 ownership_kw
         for token in doc:
-            if token.lemma_.lower() in parent_kw:
+            if token.lemma_.lower() in ownership_kw:
+                # 向左看主语
                 parent = sub = None
                 for child in token.children:
                     if child.dep_ in {"nsubj", "nsubjpass"}:
@@ -84,31 +63,23 @@ def extract_company_relationships(text):
                             if ent.start <= child.i <= ent.end and ent.label_ == "ORG":
                                 sub = ent.text
                 if parent:
-                    results.append({"sentence": text, "company": parent, "role": "parent"})
+                    results.append({
+                        "sentence": text,
+                        "company": parent,
+                        "role": "parent"
+                    })
                     matched = True
                 if sub:
-                    results.append({"sentence": text, "company": sub, "role": "subsidiary"})
+                    results.append({
+                        "sentence": text,
+                        "company": sub,
+                        "role": "subsidiary"
+                    })
                     matched = True
 
-        # Pattern 3
-        if "parent" in lower_text:
-            for org_text, org_idx in orgs:
-                next_tokens = " ".join([t.text.lower() for t in doc[org_idx:org_idx+5]])
-                if "parent" in next_tokens:
-                    results.append({"sentence": text, "company": org_text, "role": "parent"})
-                    matched = True
-
-        # 若未匹配任何规则，仍保留公司 ORG 或空值
-        if not matched:
-            if orgs:
-                for org_text, _ in orgs:
-                    results.append({"sentence": text, "company": org_text, "role": "none"})
-            else:
-                results.append({"sentence": text, "company": "", "role": "none"})
-
-        # Pattern 4: attr → prep → pobj
+        # Pattern 2: attr → prep → pobj
         for token in doc:
-            if token.dep_ == "attr" and any(kw in token.text.lower() for kw in sub_kw):
+            if token.dep_ == "attr" and any(kw in token.lemma_.lower() for kw in ownership_kw):
                 for child in token.children:
                     if child.dep_ == "prep":
                         for pobj in child.children:
@@ -120,8 +91,40 @@ def extract_company_relationships(text):
                                 })
                                 matched = True
 
+        # Pattern 3: parent keyword in context window
+        if "parent" in lower_text:
+            for org_text, org_idx in orgs:
+                next_tokens = " ".join([t.text.lower() for t in doc[org_idx:org_idx+5]])
+                if "parent" in next_tokens:
+                    results.append({
+                        "sentence": text,
+                        "company": org_text,
+                        "role": "parent"
+                    })
+                    matched = True
+
+        # 如果都没匹配到规则，仍保留 ORG 或空值
+        if not matched:
+            if orgs:
+                for org_text, _ in orgs:
+                    results.append({
+                        "sentence": text,
+                        "company": org_text,
+                        "role": "none"
+                    })
+            else:
+                results.append({
+                    "sentence": text,
+                    "company": "",
+                    "role": "none"
+                })
+
     except Exception as e:
-        results.append({"sentence": text, "company": "", "role": f"error: {str(e)}"})
+        results.append({
+            "sentence": text,
+            "company": "",
+            "role": f"error: {str(e)}"
+        })
 
     return results
 
