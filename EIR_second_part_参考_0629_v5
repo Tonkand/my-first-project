@@ -191,29 +191,37 @@ df_sentences_exploded = df_para_only \
         col("sentence_map.sentence").alias("text")
     )
 
-# ---------- 单规则处理 ----------
-config = param_list[2]
-br_match_rules = spark.sparkContext.broadcast(create_match_rules(config["raw_keywords"], config["noun_terms"]))
-br_flag_label = spark.sparkContext.broadcast(config["flag_label"])
-br_custom_keywords = spark.sparkContext.broadcast(config["custom_keywords"])
-br_custom_mode = spark.sparkContext.broadcast(config["custom_mode"])
-br_hours_pattern = spark.sparkContext.broadcast(hours_pattern)
-br_ORG_mode = spark.sparkContext.broadcast(config["ORG_mode"])
-br_require_both = spark.sparkContext.broadcast(config["require_both_keyword_and_noun"])
+# ---------- 多规则处理 ----------
+result_dfs = []
+for config in param_list:
+    br_match_rules = spark.sparkContext.broadcast(create_match_rules(config["raw_keywords"], config["noun_terms"]))
+    br_flag_label = spark.sparkContext.broadcast(config["flag_label"])
+    br_custom_keywords = spark.sparkContext.broadcast(config["custom_keywords"])
+    br_custom_mode = spark.sparkContext.broadcast(config["custom_mode"])
+    br_hours_pattern = spark.sparkContext.broadcast(hours_pattern)
+    br_ORG_mode = spark.sparkContext.broadcast(config["ORG_mode"])
+    br_require_both = spark.sparkContext.broadcast(config["require_both_keyword_and_noun"])
 
-analyze_udf = udf(analyze_text, schema)
+    analyze_udf = udf(analyze_text, schema)
 
-df_out = df_sentences_exploded.withColumn("result", analyze_udf(col("text"))) \
-    .select(
-        col("DOCUMENT"),
-        col("sid"),
-        col("text"),
-        col("result.flag"),
-        col("result.closest_term"),
-        col("result.voice"),
-        col("result.matched_term"),
-        col("result.error_msg")
-    )
+    df_out = df_sentences_exploded.withColumn("result", analyze_udf(col("text"))) \
+        .select(
+            col("DOCUMENT"),
+            col("sid"),
+            col("text"),
+            lit(config["flag_label"]).alias("rule_id"),
+            col("result.flag"),
+            col("result.closest_term"),
+            col("result.voice"),
+            col("result.matched_term"),
+            col("result.error_msg")
+        )
+    result_dfs.append(df_out)
 
-import ace_tools as tools
-tools.display_dataframe_to_user(name="NLP Result", dataframe=df_out.toPandas())
+# 合并所有结果
+df_all = result_dfs[0]
+for df_r in result_dfs[1:]:
+    df_all = df_all.union(df_r)
+
+# ✅ 去重（这里根据全部列去重，也可以改为 ["text"]）
+df_all_dedup = df_all.dropDuplicates()
