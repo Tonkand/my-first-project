@@ -106,6 +106,20 @@ def extract_company_relationships(text):
             else:
                 results.append({"sentence": text, "company": "", "role": "none"})
 
+        # Pattern 4: attr → prep → pobj
+        for token in doc:
+            if token.dep_ == "attr" and any(kw in token.text.lower() for kw in sub_kw):
+                for child in token.children:
+                    if child.dep_ == "prep":
+                        for pobj in child.children:
+                            if pobj.ent_type_ == "ORG":
+                                results.append({
+                                    "sentence": text,
+                                    "company": pobj.text,
+                                    "role": "subsidiary"
+                                })
+                                matched = True
+
     except Exception as e:
         results.append({"sentence": text, "company": "", "role": f"error: {str(e)}"})
 
