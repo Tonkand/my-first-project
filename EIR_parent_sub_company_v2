@@ -37,7 +37,15 @@ def extract_company_relationships(text):
             return []
 
         doc = nlp(text)
-        orgs = [(ent.text.strip(), ent.start) for ent in doc.ents if ent.label_ == "ORG"]
+
+        excluded_orgs = {"fda", "us fda", "u.s. fda", "government", "agency"}
+
+        orgs = [
+            (ent.text.strip(), ent.start)
+            for ent in doc.ents
+            if ent.label_ == "ORG" and ent.text.strip().lower() not in excluded_orgs
+        ]
+
         lower_text = text.lower()
         parent_kw = {"acquire", "buy", "purchase", "take over", "gain control"}
         sub_kw = {"subsidiary", "wholly owned", "owned by", "controlled by"}
