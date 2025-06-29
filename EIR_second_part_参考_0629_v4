@@ -187,6 +187,7 @@ df_sentences_exploded = df_para_only.withColumn("sentences", split_sentences_udf
         col("sentence_map.sentence").alias("text")
     )
 
+
 # ---------- 单规则处理 ----------
 config = param_list[2]
 br_match_rules = spark.sparkContext.broadcast(create_match_rules(config["raw_keywords"], config["noun_terms"]))
@@ -198,6 +199,7 @@ br_ORG_mode = spark.sparkContext.broadcast(config["ORG_mode"])
 br_require_both = spark.sparkContext.broadcast(config["require_both_keyword_and_noun"])
 
 analyze_udf = udf(analyze_text, schema)
+
 
 df_out = df_sentences_exploded.withColumn("result", analyze_udf(col("text"))) \
     .select(
