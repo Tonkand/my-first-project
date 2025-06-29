@@ -29,16 +29,22 @@ def wrap_split_sentences(paragraph, idx):
 
 split_sentences_udf_spark = udf(wrap_split_sentences, ArrayType(MapType(StringType(), StringType())))
 
-# ✅ 新版本：统一 keywords
-ownership_kw = {
-    "owner", "acquire", "buy", "purchase", "take over",
-    "gain control", "subsidiary", "controlled", "owned"
-}
+import re
 
-# ✅ 排除不是公司的词
-excluded_orgs = {"fda", "us fda", "u.s. fda", "government", "agency"}
+# ✅ 排除名单
+excluded_orgs = {"fda", "us fda", "government", "agency", "llc"}
 
-# ✅ 抽取公司关系
+# ✅ 统一排除名单：去掉标点 + 小写
+def normalize_org_name(name):
+    if not name:
+        return ""
+    # 去除所有非字母数字
+    name_clean = re.sub(r"[^A-Za-z0-9]", "", name)
+    return name_clean.lower()
+
+excluded_orgs_normalized = {normalize_org_name(org) for org in excluded_orgs}
+
+# ✅ 抽取公司关系（整合 normalized 排除逻辑）
 def extract_company_relationships(text):
     results = []
     try:
@@ -47,30 +53,37 @@ def extract_company_relationships(text):
 
         doc = nlp(text)
 
-        # orgs 去除排除词
-        orgs = [
-            (ent.text.strip(), ent.start)
-            for ent in doc.ents
-            if ent.label_ == "ORG" and ent.text.strip().lower() not in excluded_orgs
-        ]
+        orgs = []
+        for ent in doc.ents:
+            if ent.label_ == "ORG":
+                norm_name = normalize_org_name(ent.text.strip())
+                if norm_name not in excluded_orgs_normalized:
+                    orgs.append((ent.text.strip(), ent.start))
 
         lower_text = text.lower()
         matched = False
 
-        # Pattern 1: token text 在 ownership_kw
+        # Pattern 1: 动词 children
+        ownership_kw = {
+            "owner", "acquire", "buy", "purchase", "take over",
+            "gain control", "subsidiary", "controlled", "owned"
+        }
         for token in doc:
             if token.lemma_.lower() in ownership_kw:
-                # 向左看主语
                 parent = sub = None
                 for child in token.children:
                     if child.dep_ in {"nsubj", "nsubjpass"}:
                         for ent in doc.ents:
                             if ent.start <= child.i <= ent.end and ent.label_ == "ORG":
-                                parent = ent.text
+                                norm_name = normalize_org_name(ent.text)
+                                if norm_name not in excluded_orgs_normalized:
+                                    parent = ent.text
                     elif child.dep_ in {"dobj", "pobj"}:
                         for ent in doc.ents:
                             if ent.start <= child.i <= ent.end and ent.label_ == "ORG":
-                                sub = ent.text
+                                norm_name = normalize_org_name(ent.text)
+                                if norm_name not in excluded_orgs_normalized:
+                                    sub = ent.text
                 if parent:
                     results.append({
                         "sentence": text,
@@ -86,19 +99,21 @@ def extract_company_relationships(text):
                     })
                     matched = True
 
-        # Pattern 2: attr → prep → pobj
+        # Pattern 4: attr → prep → pobj
         for token in doc:
             if token.dep_ == "attr" and any(kw in token.lemma_.lower() for kw in ownership_kw):
                 for child in token.children:
                     if child.dep_ == "prep":
                         for pobj in child.children:
                             if pobj.ent_type_ == "ORG":
-                                results.append({
-                                    "sentence": text,
-                                    "company": pobj.text,
-                                    "role": "subsidiary"
-                                })
-                                matched = True
+                                norm_name = normalize_org_name(pobj.text)
+                                if norm_name not in excluded_orgs_normalized:
+                                    results.append({
+                                        "sentence": text,
+                                        "company": pobj.text,
+                                        "role": "subsidiary"
+                                    })
+                                    matched = True
 
         # Pattern 3: parent keyword in context window
         if "parent" in lower_text:
@@ -112,7 +127,7 @@ def extract_company_relationships(text):
                     })
                     matched = True
 
-        # 如果都没匹配到规则，仍保留 ORG 或空值
+        # 若没有匹配到任何模式
         if not matched:
             if orgs:
                 for org_text, _ in orgs:
