@@ -44,7 +44,6 @@ def normalize_org_name(name):
 
 excluded_orgs_normalized = {normalize_org_name(org) for org in excluded_orgs}
 
-# ✅ 抽取公司关系（整合 normalized 排除逻辑）
 def extract_company_relationships(text):
     results = []
     try:
@@ -53,6 +52,7 @@ def extract_company_relationships(text):
 
         doc = nlp(text)
 
+        # Normalize ORGs and exclude unwanted ones
         orgs = []
         for ent in doc.ents:
             if ent.label_ == "ORG":
@@ -63,11 +63,7 @@ def extract_company_relationships(text):
         lower_text = text.lower()
         matched = False
 
-        # Pattern 1: 动词 children
-        ownership_kw = {
-            "owner", "acquire", "buy", "purchase", "take over",
-            "gain control", "subsidiary", "controlled", "owned"
-        }
+        # ---------- Pattern 1 ----------
         for token in doc:
             if token.lemma_.lower() in ownership_kw:
                 parent = sub = None
@@ -99,7 +95,7 @@ def extract_company_relationships(text):
                     })
                     matched = True
 
-        # Pattern 4: attr → prep → pobj
+        # ---------- Pattern 4 ----------
         for token in doc:
             if token.dep_ == "attr" and any(kw in token.lemma_.lower() for kw in ownership_kw):
                 for child in token.children:
@@ -115,7 +111,7 @@ def extract_company_relationships(text):
                                     })
                                     matched = True
 
-        # Pattern 3: parent keyword in context window
+        # ---------- Pattern 3 ----------
         if "parent" in lower_text:
             for org_text, org_idx in orgs:
                 next_tokens = " ".join([t.text.lower() for t in doc[org_idx:org_idx+5]])
@@ -127,7 +123,60 @@ def extract_company_relationships(text):
                     })
                     matched = True
 
-        # 若没有匹配到任何模式
+        # ---------- Pattern 5 ----------
+        # ROOT → prep(as) → pobj
+        for token in doc:
+            if token.dep_ == "ROOT" and token.pos_ in {"VERB", "AUX", "ADJ"}:
+                for child in token.children:
+                    if child.dep_ == "prep" and child.text.lower() == "as":
+                        for pobj in child.children:
+                            if pobj.ent_type_ == "ORG":
+                                norm_name = normalize_org_name(pobj.text)
+                                if norm_name not in excluded_orgs_normalized:
+                                    results.append({
+                                        "sentence": text,
+                                        "company": pobj.text,
+                                        "role": "parent"
+                                    })
+                                    matched = True
+
+        # ---------- Pattern 6 ----------
+        # nsubj compound → prep(as) → pobj
+        for token in doc:
+            if token.dep_ == "ROOT" and token.pos_ in {"VERB", "AUX", "ADJ"}:
+                subj = None
+                for child in token.children:
+                    if child.dep_ == "nsubj":
+                        compounds = [
+                            t.text for t in child.children if t.dep_ == "compound"
+                        ]
+                        if compounds:
+                            subj = " ".join(compounds + [child.text])
+                        else:
+                            subj = child.text
+
+                for child in token.children:
+                    if child.dep_ == "prep" and child.text.lower() == "as":
+                        for pobj in child.children:
+                            if pobj.ent_type_ == "ORG":
+                                norm_name = normalize_org_name(pobj.text)
+                                if norm_name not in excluded_orgs_normalized:
+                                    if subj:
+                                        norm_subj = normalize_org_name(subj)
+                                        if norm_subj not in excluded_orgs_normalized:
+                                            results.append({
+                                                "sentence": text,
+                                                "company": subj,
+                                                "role": "subsidiary"
+                                            })
+                                    results.append({
+                                        "sentence": text,
+                                        "company": pobj.text,
+                                        "role": "parent"
+                                    })
+                                    matched = True
+
+        # ---------- 若没有匹配任何模式 ----------
         if not matched:
             if orgs:
                 for org_text, _ in orgs:
